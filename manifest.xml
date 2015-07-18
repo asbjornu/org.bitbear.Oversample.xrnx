@@ -21,11 +21,6 @@
   
   <!-- === OPTIONAL ENTRIES === -->
   
-  <!-- Optional relative path and name of an icon file, which may be shown -->
-  <!-- in tool browsers. The icon must be provided as PNG file and should have -->
-  <!-- a size of 128x128 pixels -->
-  <Icon>icon.png</Icon>
-  
   <!-- Optional http:// based URL of the tools homepage, if available... -->
   <Homepage>http://github.com/asbjornu/Oversample.xrnx</Homepage>
 
