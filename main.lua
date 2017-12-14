@@ -6,6 +6,7 @@ https://bitbear.org/
 ============================================================================]]--
 
 require "Oversample/Oversample"
+require "Oversample/ProcessSlicer"
 
 --------------------------------------------------------------------------------
 -- Preferences
