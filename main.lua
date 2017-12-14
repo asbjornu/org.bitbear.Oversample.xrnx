@@ -11,7 +11,7 @@ require "Oversample/Oversample"
 -- Preferences
 --------------------------------------------------------------------------------
 
-local options = renoise.Document.create("org.bitbear.Oversample.Preferences") {
+local options = renoise.Document.create("preferences") {
   debug = true
 }
 
