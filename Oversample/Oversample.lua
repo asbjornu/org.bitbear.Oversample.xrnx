@@ -14,6 +14,8 @@ local knownParameters = {
     "Processing Resolution"
 }
 
+local dialog = nil
+
 function oversample()
     local layout = vb:row {
         margin = CONTENT_MARGIN
@@ -37,7 +39,7 @@ function oversample()
     slicer:start()
 
     print('Renoise:show_custom_dialog')
-    renoise.app():show_custom_dialog("Batch Building Views", layout)
+    dialog = renoise.app():show_custom_dialog("Batch Building Views", layout)
 
     -- print('ProcessSlicer:stop')
     -- slicer:stop()
@@ -47,6 +49,11 @@ function do_oversample(layout)
     print('do_oversample')
 
     for t = 1, #renoise.song().tracks do
+        if (dialog and not dialog.visible) then
+            print('Dialog closed, stopping.')
+            return
+        end
+
         local track = renoise.song().tracks[t]
 
         -- print(track.name)
@@ -60,6 +67,11 @@ function do_oversample(layout)
         }
 
         for d = 1, #track.devices do
+            if (dialog and not dialog.visible) then
+                print('Dialog closed, stopping.')
+                return
+            end
+
             local device = track.devices[d]
 
             -- print(("    %s (%s)"):format(device.name, device.device_path))
@@ -71,6 +83,11 @@ function do_oversample(layout)
             if (device.is_active) then
                 local parameters = device.parameters
                 for p = 1, #parameters do
+                    if (dialog and not dialog.visible) then
+                        print('Dialog closed, stopping.')
+                        return
+                    end
+
                     local parameter = device.parameters[p]
 
                     --[[
