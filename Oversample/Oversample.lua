@@ -5,6 +5,7 @@ local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
 local COLUMN_WIDTH = 8 * renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
 local oversample_dialog = nil
 local settings_dialog = nil
+local devices = {}
 
 function oversample()
     local layout = vb:row {
@@ -33,15 +34,6 @@ end
 function settings()
     local layout = vb:row {
         margin = CONTENT_MARGIN
-    }
-
-    local knownDevicesRow = vb:row {
-        margin = DEFAULT_DIALOG_MARGIN,
-        spacing = DEFAULT_CONTROL_SPACING,
-
-        vb:text {
-            text = "Known devices"
-        }
     }
 
     print('oversample:ProcessSlicer:init')
@@ -100,18 +92,22 @@ function enumerate_devices(track, trackColumn)
 
         local device = track:device(d)
 
-        print(("    %s (%s)"):format(device.name, device.device_path))
+        if (devices[device.name]) then
+            print(("    %s (%s) is cached, not enumerating its parameters."):format(device.name, device.device_path))
+        else
+            print(("    %s (%s) is new, enumerating parameters."):format(device.name, device.device_path))
 
-        trackColumn:add_child(vb:text {
-            text = device.name
-        })
+            trackColumn:add_child(vb:text {
+                text = device.name
+            })
 
-        if (device.is_active) then
-            print('enumerate_devices:ProcessSlicer:init')
-            local slicer = ProcessSlicer(enumerate_parameters, nil, device)
-            
-            print('enumerate_devices:ProcessSlicer:start')        
-            slicer:start()   
+            if (device.is_active) then
+                print('enumerate_devices:ProcessSlicer:init')
+                local slicer = ProcessSlicer(enumerate_parameters, nil, device)
+                
+                print('enumerate_devices:ProcessSlicer:start')        
+                slicer:start()   
+            end
         end
 
         coroutine.yield()
@@ -119,6 +115,8 @@ function enumerate_devices(track, trackColumn)
 end
 
 function enumerate_parameters(device)
+    devices[device.name] = {}
+
     for p = 1, table.getn(device.parameters) do
         if (settings_dialog and not settings_dialog.visible) then
             print('Dialog closed, stopping.')
@@ -126,6 +124,8 @@ function enumerate_parameters(device)
         end
 
         local parameter = device:parameter(p)
+
+        devices[device.name][parameter.name] = parameter.value
 
         print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d)."):format(
             parameter.name,
