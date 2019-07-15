@@ -31,32 +31,33 @@ function oversample()
         },
     }
 
-    print('ProcessSlicer:init')
+    print('oversample:ProcessSlicer:init')
+    local slicer = ProcessSlicer(enumerate_tracks, nil, layout)
 
-    local slicer = ProcessSlicer(do_oversample, nil, layout)
-
-    print('ProcessSlicer:start')
+    print('oversample:ProcessSlicer:start')
     slicer:start()
 
-    print('Renoise:show_custom_dialog')
+    print('oversample:Renoise:show_custom_dialog')
     dialog = renoise.app():show_custom_dialog("Batch Building Views", layout)
 
-    -- print('ProcessSlicer:stop')
+    -- print('oversample:ProcessSlicer:stop')
     -- slicer:stop()
 end
 
-function do_oversample(layout)
-    print('do_oversample')
+function enumerate_tracks(layout)
+    print('enumerate_tracks')
+    
+    local song = renoise.song()
 
-    for t = 1, #renoise.song().tracks do
+    for t = 1, table.getn(song.tracks) do
         if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return
         end
 
-        local track = renoise.song().tracks[t]
+        local track = song:track(t)
 
-        -- print(track.name)
+        print(track.name)
 
         local trackColumn = vb:column {
             margin = DEFAULT_DIALOG_MARGIN,
@@ -66,51 +67,65 @@ function do_oversample(layout)
             }
         }
 
-        for d = 1, #track.devices do
-            if (dialog and not dialog.visible) then
-                print('Dialog closed, stopping.')
-                return
-            end
+        print('enumerate_tracks:ProcessSlicer:init')
+        local slicer = ProcessSlicer(enumerate_devices, nil, track, trackColumn)
+        
+        print('enumerate_tracks:ProcessSlicer:start')        
+        slicer:start()
+    
+        coroutine.yield()
+        layout:add_child(trackColumn)
+    end
+end
 
-            local device = track.devices[d]
-
-            -- print(("    %s (%s)"):format(device.name, device.device_path))
-
-            trackColumn:add_child(vb:text {
-                text = device.name
-            })
-
-            if (device.is_active) then
-                local parameters = device.parameters
-                for p = 1, #parameters do
-                    if (dialog and not dialog.visible) then
-                        print('Dialog closed, stopping.')
-                        return
-                    end
-
-                    local parameter = device.parameters[p]
-
-                    --[[
-                    print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d)."):format(
-                        parameter.name,
-                        parameter.value,
-                        parameter.value_min,
-                        parameter.value_max,
-                        parameter.value_quantum,
-                        parameter.value_default
-                    ))
-
-                    -- parameter.record_value(value)
-                    ]]--
-
-                    coroutine.yield()
-                end
-            end
-
-            coroutine.yield()
+function enumerate_devices(track, trackColumn)
+    for d = 1, table.getn(track.devices) do
+        if (dialog and not dialog.visible) then
+            print('Dialog closed, stopping.')
+            return
         end
 
-        layout:add_child(trackColumn)
+        local device = track:device(d)
+
+        print(("    %s (%s)"):format(device.name, device.device_path))
+
+        trackColumn:add_child(vb:text {
+            text = device.name
+        })
+
+        if (device.is_active) then
+            print('enumerate_devices:ProcessSlicer:init')
+            local slicer = ProcessSlicer(enumerate_parameters, nil, device)
+            
+            print('enumerate_devices:ProcessSlicer:start')        
+            slicer:start()   
+        end
+
+        coroutine.yield()
+    end
+end
+
+function enumerate_parameters(device)
+    for p = 1, table.getn(device.parameters) do
+        if (dialog and not dialog.visible) then
+            print('Dialog closed, stopping.')
+            return
+        end
+
+        local parameter = device:parameter(p)
+
+        print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d)."):format(
+            parameter.name,
+            parameter.value,
+            parameter.value_min,
+            parameter.value_max,
+            parameter.value_quantum,
+            parameter.value_default
+        ))
+
+        -- parameter.record_value(value)
+
+        coroutine.yield()
     end
 end
 
