@@ -5,6 +5,7 @@ local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
 local COLUMN_WIDTH = 8 * renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
 local oversample_dialog = nil
 local settings_dialog = nil
+local settings_layout = nil
 local devices = {}
 
 function oversample()
@@ -32,24 +33,56 @@ function oversample()
 end
 
 function settings()
-    local layout = vb:row {
+    settings_layout = vb:row {
         margin = CONTENT_MARGIN
     }
 
     print('oversample:ProcessSlicer:init')
-    local slicer = ProcessSlicer(enumerate_tracks, nil, layout)
+    local slicer = ProcessSlicer(enumerate_tracks, add_device_popup)
 
     print('oversample:ProcessSlicer:start')
     slicer:start()
 
     print('oversample:Renoise:show_custom_dialog')
-    settings_dialog = renoise.app():show_custom_dialog("Oversample settings", layout)
+    settings_dialog = renoise.app():show_custom_dialog("Oversample settings", settings_layout)
 
     -- print('oversample:ProcessSlicer:stop')
     -- slicer:stop()
 end
 
-function enumerate_tracks(layout)
+function add_device_popup()
+    print('add_device_popup')
+    local deviceItems = {}
+
+    local i = 1
+    for k, v in pairs(devices) do
+        deviceItems[i] = k
+        i = i + 1
+    end
+
+    local devicesPopup = vb:popup {
+        items = deviceItems,
+        value = 1,
+        width = COLUMN_WIDTH,
+        notifier = function(value)
+            rprint(value)
+            local device = deviceItems[value]
+            rprint(device)
+        end,
+    }
+
+    local devicesView = vb:horizontal_aligner {
+        mode = "justify",
+        vb:text {
+            text = "Device:"
+        },
+        devicesPopup
+    }
+
+    settings_layout:add_child(devicesView)
+end
+
+function enumerate_tracks()
     print('enumerate_tracks')
     
     local song = renoise.song()
@@ -62,28 +95,19 @@ function enumerate_tracks(layout)
 
         local track = song:track(t)
 
-        print(track.name)
+        -- print(track.name)
 
-        local trackColumn = vb:column {
-            margin = DEFAULT_DIALOG_MARGIN,
-            vb:text {
-                text = track.name,
-                width = COLUMN_WIDTH
-            }
-        }
-
-        print('enumerate_tracks:ProcessSlicer:init')
-        local slicer = ProcessSlicer(enumerate_devices, nil, track, trackColumn)
+        -- print('enumerate_tracks:ProcessSlicer:init')
+        local slicer = ProcessSlicer(enumerate_devices, nil, track)
         
-        print('enumerate_tracks:ProcessSlicer:start')        
+        -- print('enumerate_tracks:ProcessSlicer:start')        
         slicer:start()
     
         coroutine.yield()
-        layout:add_child(trackColumn)
     end
 end
 
-function enumerate_devices(track, trackColumn)
+function enumerate_devices(track)
     for d = 1, table.getn(track.devices) do
         if (settings_dialog and not settings_dialog.visible) then
             print('Dialog closed, stopping.')
@@ -92,22 +116,15 @@ function enumerate_devices(track, trackColumn)
 
         local device = track:device(d)
 
-        if (devices[device.name]) then
-            print(("    %s (%s) is cached, not enumerating its parameters."):format(device.name, device.device_path))
-        else
-            print(("    %s (%s) is new, enumerating parameters."):format(device.name, device.device_path))
-
-            trackColumn:add_child(vb:text {
-                text = device.name
-            })
-
-            if (device.is_active) then
-                print('enumerate_devices:ProcessSlicer:init')
-                local slicer = ProcessSlicer(enumerate_parameters, nil, device)
-                
-                print('enumerate_devices:ProcessSlicer:start')        
-                slicer:start()   
-            end
+        if (device.is_active and not devices[device.name]) then
+            devices[device.name] = device.name
+            --[[
+            print('enumerate_devices:ProcessSlicer:init')
+            local slicer = ProcessSlicer(enumerate_parameters, nil, device)
+            
+            print('enumerate_devices:ProcessSlicer:start')        
+            slicer:start()   
+            ]]--
         end
 
         coroutine.yield()
