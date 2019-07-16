@@ -13,7 +13,7 @@ function oversample()
         margin = CONTENT_MARGIN
     }
 
-    local oversampleColumn = vb:column {
+    local oversample_column = vb:column {
         margin = DEFAULT_DIALOG_MARGIN,
         vb:button {
             text = "Oversample",
@@ -21,13 +21,13 @@ function oversample()
         }
     }
     
-    oversampleColumn:add_child(vb:button {
+    oversample_column:add_child(vb:button {
         text = "Settings",
         width = COLUMN_WIDTH,
         notifier = settings
     })
     
-    layout:add_child(oversampleColumn)
+    layout:add_child(oversample_column)
 
     oversample_dialog = renoise.app():show_custom_dialog("Oversample", layout)
 end
@@ -52,34 +52,33 @@ end
 
 function add_device_popup()
     print('add_device_popup')
-    local deviceItems = {}
+    local device_items = {}
 
     local i = 1
     for k, v in pairs(devices) do
-        deviceItems[i] = k
+        device_items[i] = k
         i = i + 1
     end
 
-    local devicesPopup = vb:popup {
-        items = deviceItems,
+    local devices_popup = vb:popup {
+        items = device_items,
         value = 1,
         width = COLUMN_WIDTH,
         notifier = function(value)
-            rprint(value)
-            local device = deviceItems[value]
-            rprint(device)
+            local device_name = device_items[value]
+            print(device_name)
         end,
     }
 
-    local devicesView = vb:horizontal_aligner {
+    local devices_view = vb:horizontal_aligner {
         mode = "justify",
         vb:text {
             text = "Device:"
         },
-        devicesPopup
+        devices_popup
     }
 
-    settings_layout:add_child(devicesView)
+    settings_layout:add_child(devices_view)
 end
 
 function enumerate_tracks()
