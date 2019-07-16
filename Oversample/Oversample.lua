@@ -3,55 +3,66 @@ local DEFAULT_DIALOG_MARGIN = renoise.ViewBuilder.DEFAULT_DIALOG_MARGIN
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
 local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
 local COLUMN_WIDTH = 8 * renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
-local oversample_dialog = nil
 local settings_dialog = nil
-local settings_layout = nil
 local devices = {}
 
 function oversample()
-    local layout = vb:row {
-        margin = CONTENT_MARGIN
-    }
-
-    local oversample_column = vb:column {
-        margin = DEFAULT_DIALOG_MARGIN,
-        vb:button {
-            text = "Oversample",
-            width = COLUMN_WIDTH
+    renoise.app():show_custom_dialog("Oversample", vb:row {
+        margin = CONTENT_MARGIN,
+        vb:column {
+            margin = DEFAULT_DIALOG_MARGIN,
+            vb:button {
+                text = "Oversample",
+                width = COLUMN_WIDTH
+            },
+            vb:button {
+                text = "Settings",
+                width = COLUMN_WIDTH,
+                notifier = settings
+            }
         }
-    }
-    
-    oversample_column:add_child(vb:button {
-        text = "Settings",
-        width = COLUMN_WIDTH,
-        notifier = settings
     })
-    
-    layout:add_child(oversample_column)
-
-    oversample_dialog = renoise.app():show_custom_dialog("Oversample", layout)
 end
 
 function settings()
-    settings_layout = vb:row {
-        margin = CONTENT_MARGIN
-    }
-
-    print('oversample:ProcessSlicer:init')
+    -- print('oversample:ProcessSlicer:init')
     local slicer = ProcessSlicer(enumerate_tracks, add_device_popup)
 
-    print('oversample:ProcessSlicer:start')
+    -- print('oversample:ProcessSlicer:start')
     slicer:start()
 
-    print('oversample:Renoise:show_custom_dialog')
-    settings_dialog = renoise.app():show_custom_dialog("Oversample settings", settings_layout)
+    -- print('oversample:Renoise:show_custom_dialog')
+    settings_dialog = renoise.app():show_custom_dialog("Oversample settings", vb:row {
+        margin = CONTENT_MARGIN,
+        vb:column {
+            vb:horizontal_aligner {
+                mode = "justify",
+                vb:text {
+                    text = "Device:"
+                },
+                vb:popup {
+                    id = "devices_popup",
+                    width = COLUMN_WIDTH,
+                    notifier = function(value)
+                        local device_name = vb.views.devices_popup.items[value]
+                        print(device_name)
+                    end,
+                }
+            },
+            vb:text {
+                id = "status",
+                text = "Finding devices...",
+                width = COLUMN_WIDTH
+            }
+        }
+    })
 
     -- print('oversample:ProcessSlicer:stop')
     -- slicer:stop()
 end
 
 function add_device_popup()
-    print('add_device_popup')
+    -- print('add_device_popup')
     local device_items = {}
 
     local i = 1
@@ -60,29 +71,11 @@ function add_device_popup()
         i = i + 1
     end
 
-    local devices_popup = vb:popup {
-        items = device_items,
-        value = 1,
-        width = COLUMN_WIDTH,
-        notifier = function(value)
-            local device_name = device_items[value]
-            print(device_name)
-        end,
-    }
-
-    local devices_view = vb:horizontal_aligner {
-        mode = "justify",
-        vb:text {
-            text = "Device:"
-        },
-        devices_popup
-    }
-
-    settings_layout:add_child(devices_view)
+    vb.views.devices_popup.items = device_items
 end
 
 function enumerate_tracks()
-    print('enumerate_tracks')
+    -- print('enumerate_tracks')
     
     local song = renoise.song()
 
