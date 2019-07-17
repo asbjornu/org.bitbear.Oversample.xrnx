@@ -6,8 +6,6 @@ local CONTENT_HEIGHT = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
 local COLUMN_WIDTH = 16 * CONTENT_HEIGHT
 local dialog = nil
 local devices = {}
-local selected_device = nil
-local selected_parameter = nil
 local settings_row_count = 0
 local device_popups = {}
 
@@ -118,7 +116,7 @@ function create_settings_row_identifiers(row_number)
 end
 
 function add_device_items(devices_popup_id)
-    print('add_device_items')
+    -- print('add_device_items')
     local device_items = {}
 
     local i = 1
@@ -145,35 +143,23 @@ end
 
 function device_selected(device_name, parameters_popup_id)
     -- print('device_selected')
-    local device = devices[device_name]
-    selected_device = device
 
     local slicer = ProcessSlicer(enumerate_parameters, function(return_value)
         -- print('device_selected:parameters_enumerated')
         -- Unpack the return value table; the first value is the parameters returned by enumerate_parameters
         local parameters = return_value[1]
-        local parameter_items = {}
 
-        local i = 1
-        for k, v in pairs(parameters) do
-            -- print(v)
-            parameter_items[i] = k
-            i = i + 1
-        end
-
-        -- rprint(parameter_items)
+        rprint(parameters)
     
         vb.views.status.text = 'Done.'
-        vb.views[parameters_popup_id].items = parameter_items
-    end, device)
+        vb.views[parameters_popup_id].items = parameters
+    end, device_name)
 
     -- print('enumerate_devices:ProcessSlicer:start')        
     slicer:start()   
 end
 
 function parameter_selected(parameter_name)
-    selected_parameter = parameter_name
-    
 end
 
 function enumerate_tracks()
@@ -210,24 +196,39 @@ function enumerate_devices(track)
 
         local device = track:device(d)
 
-        if (device.is_active and not devices[device.name]) then
+        if (device.is_active) then
             vb.views.status.text = track.name .. ': ' .. device.name
-            devices[device.name] = device
+            
+            if (not devices[device.name]) then
+                print('Resetting device "' .. device.name .. '".')
+                devices[device.name] = {}
+            end
+            
+            if (not devices[device.name]["instances"]) then
+                print('Resetting device instances for "' .. device.name .. '".')
+                devices[device.name]["instances"] = {}
+            end
+
+            table.insert(devices[device.name]["instances"], device)
         end
 
         coroutine.yield()
     end
 end
 
-function enumerate_parameters(device)
-    print('enumerate_parameters')
-        
-    --[[ TODO: Figure out how to extract parameters from cache.
-    if (devices[device.name] ~= nil and type(devices[device.name]) == "table") then
-        return devices[device.name]
-    end
-    --]]
+function enumerate_parameters(device_name)
+    -- print('enumerate_parameters')
 
+    if (devices and
+        devices[device_name] and
+        type(devices[device_name]) == "table" and
+        devices[device_name]["parameters"] and
+        type(devices[device_name]["parameters"]) == "table") then
+        print('Returning cached parameters for "' .. device_name .. '".')
+        return devices[device_name]["parameters"]
+    end
+
+    local device = devices[device_name]["instances"][1]
     local parameters = {}
 
     for p = 1, table.getn(device.parameters) do
@@ -239,7 +240,8 @@ function enumerate_parameters(device)
         local parameter = device:parameter(p)
 
         vb.views.status.text = device.name .. ': ' .. parameter.name
-        parameters[parameter.name] = parameter.value
+
+        table.insert(parameters, parameter.name)
 
         --[[
         print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d)."):format(
@@ -259,7 +261,10 @@ function enumerate_parameters(device)
 
     -- rprint(parameters)
 
-    devices[device.name] = parameters
+    devices[device.name]["parameters"] = parameters
+
+    -- rprint(devices)
+
     return parameters
 end
 
