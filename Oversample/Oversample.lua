@@ -58,8 +58,10 @@ function oversample()
                     width = COLUMN_WIDTH
                 },
                 vb:button {
+                    id = "oversample_button",
                     text = "Oversample",
                     width = 100,
+                    active = false,
                     notifier = do_oversample()
                 }
             }
@@ -91,6 +93,7 @@ function create_settings_row()
         vb:popup {
             id = devices_popup_id,
             width = COLUMN_WIDTH,
+            active = false,
             notifier = function(value)
                 local device_name = vb.views[devices_popup_id].items[value]
                 device_selected(device_name, parameters_popup_id)
@@ -99,6 +102,7 @@ function create_settings_row()
         vb:popup {
             id = parameters_popup_id,
             width = COLUMN_WIDTH,
+            active = false,
             notifier = function(value)
                 local parameter_name = vb.views[parameters_popup_id].items[value]
                 local selected_device_index = vb.views[devices_popup_id].value
@@ -159,14 +163,18 @@ function add_device_items_init()
     end
 
     for i, v in ipairs(device_popups) do
-        vb.views[v].items = device_items
+        local devices_popup = vb.views[v]
+        devices_popup.items = device_items
+        devices_popup.active = true
     end
 
+    vb.views["oversample_button"].active = true
     vb.views.status.text = 'Done.'
 end
 
 function add_device_items(devices_popup_id, selected_device_index)
     local device_items = {}
+    vb.views["oversample_button"].active = false
 
     local i = 1
     for k, v in pairs(devices) do
@@ -178,14 +186,17 @@ function add_device_items(devices_popup_id, selected_device_index)
         local devices_popup = vb.views[devices_popup_id]
         devices_popup.items = device_items
         devices_popup.value = selected_device_index
+        devices_popup.active = true
     else
         print('Could not add items to "' .. devices_popup_id .. '" as it does not exist.')
     end
 
+    vb.views["oversample_button"].active = true
     vb.views.status.text = 'Done.'
 end
 
 function device_selected(device_name, parameters_popup_id)
+    vb.views["oversample_button"].active = false
     -- print('device_selected')
 
     local slicer = ProcessSlicer(enumerate_parameters, function(return_value)
@@ -198,10 +209,15 @@ function device_selected(device_name, parameters_popup_id)
         vb.views.status.text = 'Done.'
         local parameters_popup = vb.views[parameters_popup_id]
         parameters_popup.items = parameters
+        parameters_popup.active = true
 
         for known_device_name, known_parameters in pairs(known_devices_parameters) do
+            vb.views["oversample_button"].active = false
+
             if (known_device_name == device_name) then
                 for parameter_index, parameter in ipairs(parameters) do
+                    vb.views["oversample_button"].active = false
+
                     if (type(known_parameters) == "string") then
                         if (parameter == known_parameters) then
                             parameters_popup.value = parameter_index
@@ -219,6 +235,7 @@ function device_selected(device_name, parameters_popup_id)
             end
         end
         
+        vb.views["oversample_button"].active = true
     end, device_name)
 
     -- print('enumerate_devices:ProcessSlicer:start')        
@@ -226,13 +243,14 @@ function device_selected(device_name, parameters_popup_id)
 end
 
 function parameter_selected(parameter_index, parameter_name, device_name)
-    print(device_name)
+    -- print(device_name)
     local device_instances = devices[device_name]["instances"]
 
     for k, v in ipairs(device_instances) do
+        vb.views["oversample_button"].active = false
         local device = device_instances[k]
         local parameter = device:parameter(parameter_index)
-
+        --[[
         print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d)."):format(
             parameter.name,
             parameter.value,
@@ -241,15 +259,19 @@ function parameter_selected(parameter_index, parameter_name, device_name)
             parameter.value_quantum,
             parameter.value_default
         ))
+        ]]--
     end
+
+    vb.views["oversample_button"].active = true
 end
 
 function enumerate_tracks()
     -- print('enumerate_tracks')
-    
     local song = renoise.song()
 
     for t = 1, table.getn(song.tracks) do
+        vb.views["oversample_button"].active = false
+
         if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return
@@ -267,9 +289,13 @@ function enumerate_tracks()
     
         coroutine.yield()
     end
+
+    vb.views["oversample_button"].active = true
 end
 
 function enumerate_devices(track)
+    vb.views["oversample_button"].active = false
+
     for d = 1, table.getn(track.devices) do
         if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
@@ -300,6 +326,7 @@ end
 
 function enumerate_parameters(device_name)
     -- print('enumerate_parameters')
+    vb.views["oversample_button"].active = false
 
     if (devices and
         devices[device_name] and
@@ -314,6 +341,8 @@ function enumerate_parameters(device_name)
     local parameters = {}
 
     for p = 1, table.getn(device.parameters) do
+        vb.views["oversample_button"].active = false
+
         if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return parameters
@@ -335,6 +364,8 @@ function enumerate_parameters(device_name)
     devices[device.name]["parameters"] = parameters
 
     -- rprint(devices)
+
+    vb.views["oversample_button"].active = true
 
     return parameters
 end
