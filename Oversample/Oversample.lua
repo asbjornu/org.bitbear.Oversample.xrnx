@@ -120,6 +120,9 @@ function create_settings_row()
             notifier = function()
                 local settings_row = create_settings_row()
                 vb.views.settings_container:add_child(settings_row)
+                local new_settings_row_identifiers = create_settings_row_identifiers()
+                local devices_popup_id = new_settings_row_identifiers["devices_popup_id"]
+                add_device_items(devices_popup_id)
             end,
         }
     }
@@ -188,8 +191,10 @@ function add_device_items(devices_popup_id, selected_device_index)
     if (vb.views[devices_popup_id]) then
         local devices_popup = vb.views[devices_popup_id]
         devices_popup.items = device_items
-        devices_popup.value = selected_device_index
         devices_popup.active = true
+        if (selected_device_index) then
+            devices_popup.value = selected_device_index
+        end
     else
         print('Could not add items to "' .. devices_popup_id .. '" as it does not exist.')
     end
