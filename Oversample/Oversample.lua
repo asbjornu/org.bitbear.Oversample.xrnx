@@ -8,10 +8,12 @@ local dialog = nil
 local devices = {}
 local selected_device = nil
 local selected_parameter = nil
+local settings_row_count = 0
+local device_popups = {}
 
 function oversample()
     -- print('oversample:ProcessSlicer:init')
-    local slicer = ProcessSlicer(enumerate_tracks, add_device_popup)
+    local slicer = ProcessSlicer(enumerate_tracks, add_device_items)
 
     -- print('oversample:ProcessSlicer:start')
     slicer:start()
@@ -22,46 +24,22 @@ function oversample()
         margin = CONTENT_MARGIN,
         vb:column {
             vb:row {
-                vb:column {
-                    vb:text {
-                        text = "Device",
-                        width = COLUMN_WIDTH
-                    },
-                    vb:popup {
-                        id = "devices_popup",
-                        width = COLUMN_WIDTH,
-                        notifier = function(value)
-                            local device_name = vb.views.devices_popup.items[value]
-                            device_selected(device_name)
-                        end,
-                    },
+                vb:text {
+                    text = "Device",
+                    width = COLUMN_WIDTH
                 },
-                vb:column {
-                    vb:text {
-                        text = "Parameters",
-                        width = COLUMN_WIDTH
-                    },
-                    vb:popup {
-                        id = "parameters_popup",
-                        width = COLUMN_WIDTH,
-                        notifier = function(value)
-                            local parameter_name = vb.views.parameters_popup.items[value]
-                            parameter_selected(parameter_name)
-                        end,
-                    }
+                vb:text {
+                    text = "Parameters",
+                    width = COLUMN_WIDTH
                 },
-                vb:column {
-                    vb:space {
-                        width = 16,
-                        height = CONTENT_HEIGHT
-                    },
-                    vb:button {
-                        text = "+",
-                        width = 16,
-                        notifier = function()
-                        end,
-                    }
-                }
+                vb:space {
+                    width = 16,
+                    height = CONTENT_HEIGHT
+                },
+            },
+            vb:column {
+                id = "settings_container",
+                create_settings_row()
             },
             vb:space {
                 height = CONTENT_HEIGHT
@@ -82,8 +60,65 @@ function oversample()
     })
 end
 
-function add_device_popup()
-    -- print('add_device_popup')
+function create_settings_row()
+    settings_row_count = settings_row_count + 1
+    local settings_row_identifiers = create_settings_row_identifiers(settings_row_count)
+
+    local devices_popup_id = settings_row_identifiers["devices_popup_id"]
+    local parameters_popup_id = settings_row_identifiers["parameters_popup_id"]
+    local settings_row_id = settings_row_identifiers["settings_row_id"]
+    local add_button_id = settings_row_identifiers["add_button_id"]
+
+    device_popups[settings_row_count] = devices_popup_id
+
+    return vb:row {
+        id = settings_row_id,
+        vb:popup {
+            id = devices_popup_id,
+            width = COLUMN_WIDTH,
+            notifier = function(value)
+                local device_name = vb.views[devices_popup_id].items[value]
+                device_selected(device_name, parameters_popup_id)
+            end,
+        },
+        vb:popup {
+            id = parameters_popup_id,
+            width = COLUMN_WIDTH,
+            notifier = function(value)
+                local parameter_name = vb.views[parameters_popup_id].items[value]
+                parameter_selected(parameter_name)
+            end,
+        },
+        vb:button {
+            id = add_button_id,
+            text = "+",
+            width = 16,
+            notifier = function()
+                local add_button = vb.views[add_button_id]
+                local settings_row = vb.views[settings_row_id]
+                settings_row:remove_child(add_button)
+                local settings_row = create_settings_row()
+                vb.views.settings_container:add_child(settings_row)
+                local new_settings_row_identifiers = create_settings_row_identifiers(settings_row_count)
+                add_device_items(new_settings_row_identifiers["devices_popup_id"])
+            end,
+        }
+    }
+end
+
+function create_settings_row_identifiers(row_number)
+    local settings_row_identifiers = {}
+
+    settings_row_identifiers["devices_popup_id"] = "devices_popup_" .. row_number
+    settings_row_identifiers["parameters_popup_id"] = "parameters_popup_" .. row_number
+    settings_row_identifiers["settings_row_id"] = "settings_row_" .. row_number
+    settings_row_identifiers["add_button_id"] = "add_button_" .. row_number
+
+    return settings_row_identifiers
+end
+
+function add_device_items(devices_popup_id)
+    print('add_device_items')
     local device_items = {}
 
     local i = 1
@@ -92,11 +127,23 @@ function add_device_popup()
         i = i + 1
     end
 
+    if (type(devices_popup_id) == "string" and devices_popup_id) then
+        print('Attempting to add items to "' .. devices_popup_id .. '".')
+        if (vb.views[devices_popup_id]) then
+            vb.views[devices_popup_id].items = device_items
+        else
+            print('Could not add items to "' .. devices_popup_id .. '" as it does not exist.')
+        end
+    else
+        for i, v in pairs(device_popups) do
+            vb.views[v].items = device_items
+        end
+    end
+
     vb.views.status.text = 'Done.'
-    vb.views.devices_popup.items = device_items
 end
 
-function device_selected(device_name)
+function device_selected(device_name, parameters_popup_id)
     -- print('device_selected')
     local device = devices[device_name]
     selected_device = device
@@ -109,15 +156,15 @@ function device_selected(device_name)
 
         local i = 1
         for k, v in pairs(parameters) do
-            print(v)
+            -- print(v)
             parameter_items[i] = k
             i = i + 1
         end
 
-        rprint(parameter_items)
+        -- rprint(parameter_items)
     
         vb.views.status.text = 'Done.'
-        vb.views.parameters_popup.items = parameter_items
+        vb.views[parameters_popup_id].items = parameter_items
     end, device)
 
     -- print('enumerate_devices:ProcessSlicer:start')        
