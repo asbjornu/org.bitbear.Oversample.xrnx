@@ -2,29 +2,14 @@ local vb = renoise.ViewBuilder()
 local DEFAULT_DIALOG_MARGIN = renoise.ViewBuilder.DEFAULT_DIALOG_MARGIN
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
 local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
-local COLUMN_WIDTH = 16 * renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
-local settings_dialog = nil
+local CONTENT_HEIGHT = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
+local COLUMN_WIDTH = 16 * CONTENT_HEIGHT
+local dialog = nil
 local devices = {}
+local selected_device = nil
+local selected_parameter = nil
 
 function oversample()
-    renoise.app():show_custom_dialog("Oversample", vb:row {
-        margin = CONTENT_MARGIN,
-        vb:column {
-            margin = DEFAULT_DIALOG_MARGIN,
-            vb:button {
-                text = "Oversample",
-                width = COLUMN_WIDTH
-            },
-            vb:button {
-                text = "Settings",
-                width = COLUMN_WIDTH,
-                notifier = settings
-            }
-        }
-    })
-end
-
-function settings()
     -- print('oversample:ProcessSlicer:init')
     local slicer = ProcessSlicer(enumerate_tracks, add_device_popup)
 
@@ -32,7 +17,8 @@ function settings()
     slicer:start()
 
     -- print('oversample:Renoise:show_custom_dialog')
-    settings_dialog = renoise.app():show_custom_dialog("Oversample settings", vb:row {
+
+    renoise.app():show_custom_dialog("Oversample", vb:row {
         margin = CONTENT_MARGIN,
         vb:column {
             vb:row {
@@ -60,21 +46,40 @@ function settings()
                         width = COLUMN_WIDTH,
                         notifier = function(value)
                             local parameter_name = vb.views.parameters_popup.items[value]
-                            print(parameter_name)
+                            parameter_selected(parameter_name)
+                        end,
+                    }
+                },
+                vb:column {
+                    vb:space {
+                        width = 16,
+                        height = CONTENT_HEIGHT
+                    },
+                    vb:button {
+                        text = "+",
+                        width = 16,
+                        notifier = function()
                         end,
                     }
                 }
             },
-            vb:text {
-                id = "status",
-                text = "Finding devices...",
-                width = COLUMN_WIDTH
+            vb:space {
+                height = CONTENT_HEIGHT
+            },
+            vb:horizontal_aligner {
+                mode = "justify",
+                vb:text {
+                    id = "status",
+                    text = "Finding devices...",
+                    width = COLUMN_WIDTH
+                },
+                vb:button {
+                    text = "Oversample",
+                    width = 100
+                }
             }
-        }
+        },
     })
-
-    -- print('oversample:ProcessSlicer:stop')
-    -- slicer:stop()
 end
 
 function add_device_popup()
@@ -94,6 +99,7 @@ end
 function device_selected(device_name)
     -- print('device_selected')
     local device = devices[device_name]
+    selected_device = device
 
     local slicer = ProcessSlicer(enumerate_parameters, function(return_value)
         -- print('device_selected:parameters_enumerated')
@@ -118,13 +124,18 @@ function device_selected(device_name)
     slicer:start()   
 end
 
+function parameter_selected(parameter_name)
+    selected_parameter = parameter_name
+    
+end
+
 function enumerate_tracks()
     -- print('enumerate_tracks')
     
     local song = renoise.song()
 
     for t = 1, table.getn(song.tracks) do
-        if (settings_dialog and not settings_dialog.visible) then
+        if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return
         end
@@ -145,7 +156,7 @@ end
 
 function enumerate_devices(track)
     for d = 1, table.getn(track.devices) do
-        if (settings_dialog and not settings_dialog.visible) then
+        if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return
         end
@@ -173,7 +184,7 @@ function enumerate_parameters(device)
     local parameters = {}
 
     for p = 1, table.getn(device.parameters) do
-        if (settings_dialog and not settings_dialog.visible) then
+        if (dialog and not dialog.visible) then
             print('Dialog closed, stopping.')
             return parameters
         end
