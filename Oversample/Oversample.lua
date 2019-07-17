@@ -196,7 +196,29 @@ function device_selected(device_name, parameters_popup_id)
         -- rprint(parameters)
     
         vb.views.status.text = 'Done.'
-        vb.views[parameters_popup_id].items = parameters
+        local parameters_popup = vb.views[parameters_popup_id]
+        parameters_popup.items = parameters
+
+        for known_device_name, known_parameters in pairs(known_devices_parameters) do
+            if (known_device_name == device_name) then
+                for parameter_index, parameter in ipairs(parameters) do
+                    if (type(known_parameters) == "string") then
+                        if (parameter == known_parameters) then
+                            parameters_popup.value = parameter_index
+                        end
+                    elseif (type(known_parameters) == "table") then
+                        for _, v in ipairs(known_parameters) do
+                            if (parameter == v) then
+                                parameters_popup.value = parameter_index
+                            end
+                        end
+                    else
+                        print('Invalid parameter type for known device "' .. known_device_name .. '": ' .. type(known_parameters) .. '.')
+                    end
+                end
+            end
+        end
+        
     end, device_name)
 
     -- print('enumerate_devices:ProcessSlicer:start')        
