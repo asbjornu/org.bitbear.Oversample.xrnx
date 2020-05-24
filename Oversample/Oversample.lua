@@ -18,6 +18,9 @@ local known_devices_parameters = {
      ['VST: FabFilter: Pro-Q 2'] = {
         'Processing Mode', 'Processing Resolution'
      },
+     ['VST: FabFilter: Pro-Q 3'] = {
+        'Processing Mode', 'Processing Resolution'
+     },
 }
 
 function oversample()
