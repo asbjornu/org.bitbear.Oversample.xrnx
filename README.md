@@ -1,5 +1,7 @@
 # Oversample
 
+![Build][build-badge]
+
 Oversample is a [Renoise][renoise] plugin that will increase all quality
 parameters (such as "oversampling", "quality", "phase", etc.) in all active
 devices in the song to maximum, so you get the best quality when rendering a
@@ -27,3 +29,4 @@ needs and may not work for you.**
   keep backups.
 
   [renoise]: https://www.renoise.com/
+  [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/workflows/Build/badge.svg
