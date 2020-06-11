@@ -435,6 +435,10 @@ function set_values()
         local parameter_value = selected_device["parameter_value"]
         local device_instances = devices[device_name]["instances"] 
 
+        if (parameter_value == nil) then
+            parameter_value = 0
+        end
+
         for i, device in ipairs(device_instances) do
             local parameter = device:parameter(parameter_index)
 
