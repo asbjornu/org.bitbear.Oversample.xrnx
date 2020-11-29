@@ -24,6 +24,10 @@ local known_devices_parameters = {
 }
 
 function oversample()
+    if (dialog) then
+        destroy()
+    end
+
     -- print('oversample:ProcessSlicer:init')
     local slicer = ProcessSlicer(enumerate_tracks, add_device_items_init)
 
@@ -32,7 +36,8 @@ function oversample()
 
     -- print('oversample:Renoise:show_custom_dialog')
 
-    renoise.app():show_custom_dialog("Oversample", vb:row {
+    local oversample = vb:row {
+        id = "org.bitbear.Oversample",
         margin = CONTENT_MARGIN,
         vb:column {
             vb:row {
@@ -74,8 +79,18 @@ function oversample()
                     notifier = set_values
                 }
             }
-        },
-    })
+        }
+    }
+
+    dialog = renoise.app():show_custom_dialog("Oversample", oversample)
+end
+
+function destroy()
+    dialog = nil
+    vb.views["set_values_button"] = nil
+    vb.views["status"] = nil
+    vb.views["settings_container"] = nil
+    vb.views["org.bitbear.Oversample"] = nil
 end
 
 function create_settings_row()
@@ -247,7 +262,7 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
         local parameters = return_value[1]
 
         -- rprint(parameters)
-    
+
         vb.views.status.text = 'Done.'
         local parameters_popup = vb.views[parameter_popup_id]
         parameters_popup.items = parameters
@@ -276,12 +291,12 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
                 end
             end
         end
-        
+
         vb.views["set_values_button"].active = true
     end, device_name)
 
-    -- print('enumerate_devices:ProcessSlicer:start')        
-    slicer:start()   
+    -- print('enumerate_devices:ProcessSlicer:start')
+    slicer:start()
 end
 
 function parameter_selected(parameter_index, parameter_name, device_name, row_number)
@@ -297,7 +312,7 @@ function parameter_selected(parameter_index, parameter_name, device_name, row_nu
         local settings_row_identifiers = create_settings_row_identifiers(row_number)
         local parameter_value_slider_id = settings_row_identifiers["parameter_value_slider_id"]
         local parameter_value_slider = vb.views[parameter_value_slider_id]
-        
+
         parameter_value_slider.min = parameter.value_min
         parameter_value_slider.max = parameter.value_max
         parameter_value_slider.value = parameter.value
@@ -339,10 +354,10 @@ function enumerate_tracks()
 
         -- print('enumerate_tracks:ProcessSlicer:init')
         local slicer = ProcessSlicer(enumerate_devices, nil, track)
-        
-        -- print('enumerate_tracks:ProcessSlicer:start')        
+
+        -- print('enumerate_tracks:ProcessSlicer:start')
         slicer:start()
-    
+
         coroutine.yield()
     end
 
@@ -362,12 +377,12 @@ function enumerate_devices(track)
 
         if (device.is_active) then
             vb.views.status.text = track.name .. ': ' .. device.name
-            
+
             if (not devices[device.name]) then
                 -- print('Resetting device "' .. device.name .. '".')
                 devices[device.name] = {}
             end
-            
+
             if (not devices[device.name]["instances"]) then
                 -- print('Resetting device instances for "' .. device.name .. '".')
                 devices[device.name]["instances"] = {}
@@ -426,14 +441,14 @@ end
 
 function set_values()
     local set_values_button = vb.views["set_values_button"]
-    set_values_button.active = false    
+    set_values_button.active = false
     local parameters_changed = 0
 
     for row_number, selected_device in ipairs(selected_devices) do
         local device_name = selected_device["device_name"]
         local parameter_index = selected_device["parameter_index"]
         local parameter_value = selected_device["parameter_value"]
-        local device_instances = devices[device_name]["instances"] 
+        local device_instances = devices[device_name]["instances"]
 
         if (parameter_value == nil) then
             parameter_value = 0
