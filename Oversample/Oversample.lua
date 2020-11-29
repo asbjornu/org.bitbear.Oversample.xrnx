@@ -12,6 +12,7 @@ local device_popups = {}
 local selected_devices = {}
 local known_devices_parameters = {
      ['VST: FabFilter: Saturn'] = 'High Quality',
+     ['VST: FabFilter: Saturn 2'] = 'High Quality Mode',
      ['VST: FabFilter: Pro-MB'] = 'Oversampling',
      ['VST: FabFilter: Pro-C 2'] = 'Oversampling',
      ['VST: FabFilter: Pro-L 2'] = 'Oversampling',
@@ -202,6 +203,7 @@ function add_device_items_init()
                 local settings_row_identifiers = create_settings_row_identifiers()
                 local device_popup_id = settings_row_identifiers["device_popup_id"]
                 add_device_items(device_popup_id, device_index)
+                break
             else
                 -- print('Unknown device "' .. device_name .. '", skipping')
             end
