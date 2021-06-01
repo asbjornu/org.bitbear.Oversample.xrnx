@@ -154,7 +154,7 @@ function create_settings_row()
             width = HALF_COLUMN_WIDTH,
             active = false,
             notifier = function(value)
-                print(value)
+                -- print(value)
                 local parameter_value = vb.views[parameter_value_slider_id].value
                 local parameter_popup = vb.views[parameter_popup_id]
                 local parameter_name = parameter_popup.items[value]
@@ -208,12 +208,8 @@ function add_device_items_init()
         for known_device_name, _ in pairs(known_devices_parameters) do
             if (known_device_name == device_name) then
                 found = true
-                -- print('Found known device "' .. device_name .. '", adding popup for it with preselected value.')
-                local settings_row = create_settings_row()
-                vb.views.settings_container:add_child(settings_row)
-                local settings_row_identifiers = create_settings_row_identifiers()
-                local device_popup_id = settings_row_identifiers["device_popup_id"]
-                add_device_items(device_popup_id, device_index)
+                -- print('Found known device "' .. device_name .. '", adding popup for it.')
+                add_device_row(device_index)
                 break
             else
                 -- print('Unknown device "' .. device_name .. '", skipping')
@@ -234,6 +230,14 @@ function add_device_items_init()
 
     vb.views["set_values_button"].active = true
     vb.views.status.text = 'Done.'
+end
+
+function add_device_row(device_index)
+    local settings_row = create_settings_row()
+    vb.views.settings_container:add_child(settings_row)
+    local settings_row_identifiers = create_settings_row_identifiers()
+    local device_popup_id = settings_row_identifiers["device_popup_id"]
+    add_device_items(device_popup_id, device_index)
 end
 
 function add_device_items(device_popup_id, selected_device_index)
@@ -331,15 +335,15 @@ function parameter_selected(parameter_index, parameter_name, device_name, row_nu
         parameter_value_slider.value = parameter.value
         parameter_value_slider.active = true
 
-        print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d), string(%s)."):format(
-            parameter.name,
-            parameter.value,
-            parameter.value_min,
-            parameter.value_max,
-            parameter.value_quantum,
-            parameter.value_default,
-            parameter.value_string
-        ))
+        -- print(("        %s: %d, min(%d), $max(%d), quantum(%d), default(%d), string(%s)."):format(
+        --     parameter.name,
+        --     parameter.value,
+        --     parameter.value_min,
+        --     parameter.value_max,
+        --     parameter.value_quantum,
+        --     parameter.value_default,
+        --     parameter.value_string
+        -- ))
     end
 
     vb.views["set_values_button"].active = true
