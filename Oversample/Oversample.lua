@@ -205,11 +205,18 @@ function add_device_items_init()
 
     local found = false
     for device_index, device_name in ipairs(device_items) do
-        for known_device_name, _ in pairs(known_devices_parameters) do
+        for known_device_name, known_device_parameters in pairs(known_devices_parameters) do
             if (known_device_name == device_name) then
                 found = true
                 -- print('Found known device "' .. device_name .. '", adding popup for it.')
-                add_device_row(device_index)
+                if (type(known_device_parameters) == "table") then
+                    for known_device_parameter_index, known_device_parameter_name in ipairs(known_device_parameters) do
+                        add_device_row(device_index)
+                    end
+                else
+                    add_device_row(device_index)
+                end
+
                 break
             else
                 -- print('Unknown device "' .. device_name .. '", skipping')
