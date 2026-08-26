@@ -29,4 +29,4 @@ needs and may not work for you.**
   keep backups.
 
   [renoise]: https://www.renoise.com/
-  [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/workflows/Build/badge.svg
+  [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/actions/workflows/lua.yml/badge.svg
