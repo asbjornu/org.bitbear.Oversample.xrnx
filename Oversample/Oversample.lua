@@ -1,3 +1,8 @@
+-- Lua 5.2+ removed table.getn; provide a compatibility shim.
+if not table.getn then
+  table.getn = function(t) return #t end
+end
+
 local vb = renoise.ViewBuilder()
 local DEFAULT_DIALOG_MARGIN = renoise.ViewBuilder.DEFAULT_DIALOG_MARGIN
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
@@ -452,7 +457,10 @@ function enumerate_parameters(device_name)
         coroutine.yield()
     end
 
-    -- rprint(parameters)
+    print('')
+    print(device_name .. ':')
+    rprint(parameters)
+    print('')
 
     devices[device.name]["parameters"] = parameters
 
