@@ -6,19 +6,24 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: leafo/gh-actions-lua@v5
-      with:
-        luaVersion: "5.1"
+    - uses: actions/checkout@v4
+    - name: Install Lua 5.1
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.1
+        sudo ln -sf /usr/bin/luac5.1 /usr/local/bin/luac
+        luac -v
     - name: lua-releng
       run: wget --quiet --output-document - https://github.com/openresty/openresty-devel-utils/raw/master/lua-releng 2>/dev/null | perl
 
   compile:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: leafo/gh-actions-lua@v5
-      with:
-        luaVersion: luajit
+    - uses: actions/checkout@v4
+    - name: Install LuaJIT
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y luajit
+        luajit -v
     - name: luajit
       run: find $(pwd) -name "*.lua" -type f -exec luajit -bl {} > /dev/null \;
