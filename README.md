@@ -3,6 +3,7 @@
 ![Build][build-badge]
 ![License][license-badge]
 ![Renoise API][renoise-api-badge]
+![Lua][lua-badge]
 
 Oversample is a [Renoise][renoise] plugin that will increase all quality
 parameters (such as "oversampling", "quality", "phase", etc.) in all active
@@ -34,3 +35,4 @@ needs and may not work for you.**
   [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/actions/workflows/lua.yml/badge.svg
   [license-badge]: https://img.shields.io/github/license/asbjornu/org.bitbear.Oversample.xrnx
   [renoise-api-badge]: https://img.shields.io/badge/Renoise%20API-6-blue
+  [lua-badge]: https://img.shields.io/badge/Lua-5.1-blue
