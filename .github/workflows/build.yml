@@ -1,0 +1,56 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Lua 5.1 and LuaJIT
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.1 luajit
+        sudo ln -sf /usr/bin/luac5.1 /usr/local/bin/luac
+        luac -v
+        luajit -v
+    - name: lua-releng
+      run: wget --quiet --output-document - https://github.com/openresty/openresty-devel-utils/raw/master/lua-releng 2>/dev/null | perl
+    - name: LuaJIT syntax check
+      run: find $(pwd) -name "*.lua" -type f -exec luajit -bl {} > /dev/null \;
+
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install LuaJIT
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y luajit
+        luajit -v
+    - name: luajit
+      run: find $(pwd) -name "*.lua" -type f -exec luajit -bl {} > /dev/null \;
+
+  luacheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install luacheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua-check
+        luacheck --version
+    - name: luacheck
+      run: luacheck .
+
+  xml:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install xmllint
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libxml2-utils
+        xmllint --version
+    - name: Validate XML
+      run: git ls-files '*.xml' | while IFS= read -r f; do xmllint --noout "$f"; done
