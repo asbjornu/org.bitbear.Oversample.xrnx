@@ -52,6 +52,9 @@ It will even block your own process GUI when trying to show it modal.
 
 class "ProcessSlicer"
 
+-- 'unpack' moved to 'table.unpack' in Lua 5.2+; keep both working.
+local unpack = table.unpack or unpack
+
 function ProcessSlicer:__init(process_func, callback, ...)
   assert(type(process_func) == "function",
     "expected a function as first argument")
@@ -60,7 +63,7 @@ function ProcessSlicer:__init(process_func, callback, ...)
     "expected nil or a function as second argument")
 
   self.__process_func = process_func
-  self.__process_func_args = arg
+  self.__process_func_args = {...}
   self.__process_thread = nil
   self.__callback = callback
   self.__data = nil
@@ -103,7 +106,7 @@ end
 --------------------------------------------------------------------------------
 -- reverse of unpack: puts any number of arguments into a table
 local function pack(...)
-  return arg
+  return {...}
 end
 
 --------------------------------------------------------------------------------
