@@ -3,6 +3,18 @@ if not table.getn then
   table.getn = function(t) return #t end
 end
 
+-- Pure, Renoise-independent helpers live in the shared core module so they can be
+-- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
+local core = require("Oversample/oversample_core")
+local known_devices_parameters = core.known_devices_parameters
+local encode_field = core.encode_field
+local decode_fields = core.decode_fields
+local match_parameter = core.match_parameter
+local known_primary = core.known_primary
+local known_secondary = core.known_secondary
+local nearest_choice_index = core.nearest_choice_index
+local same_name_set = core.same_name_set
+
 local vb = renoise.ViewBuilder()
 local DEFAULT_DIALOG_MARGIN = renoise.ViewBuilder.DEFAULT_DIALOG_MARGIN
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
@@ -14,32 +26,37 @@ local dialog = nil
 local devices = {}
 local devices_valid = false
 local settings_row_count = 0
+-- The dialog historically called this with no argument, meaning "the current row
+-- count". The pure core builder requires a row number, so supply the default here.
+local function create_settings_row_identifiers(row_number)
+   return core.create_settings_row_identifiers(row_number or settings_row_count)
+end
 local device_popups = {}
 local selected_devices = {}
-local known_devices_parameters = {
-     ['VST: FabFilter: Saturn'] = 'High Quality',
-     ['VST: FabFilter: Saturn 2'] = 'High Quality Mode',
-     ['VST: FabFilter: Pro-MB'] = 'Oversampling',
-     ['VST: FabFilter: Pro-C 2'] = 'Oversampling',
-     ['VST: FabFilter: Pro-L 2'] = 'Oversampling',
-     ['VST: FabFilter: Pro-Q 2'] = {
-        'Processing Mode', 'Processing Resolution'
-     },
-      ['VST: FabFilter: Pro-Q 3'] = {
-         'Processing Mode', 'Processing Resolution'
-      },
-      ['VST3: FabFilter: Saturn'] = 'High Quality',
-      ['VST3: FabFilter: Saturn 2'] = 'High Quality Mode',
-      ['VST3: FabFilter: Pro-MB'] = 'Oversampling',
-      ['VST3: FabFilter: Pro-C 2'] = 'Oversampling',
 
-      ['VST3: FabFilter: Pro-Q 2'] = {
-         'Processing Mode', 'Processing Resolution'
-      },
-      ['VST3: FabFilter: Pro-Q 3'] = {
-         'Processing Mode', 'Processing Resolution'
-      },
-}
+-- Tracks in-flight per-device parameter scans so the status text only reports
+-- "Done." once every background scan has actually finished (each row's default
+-- device triggers its own asynchronous enumeration via ProcessSlicer).
+local pending_parameter_scans = 0
+local device_scan_count = 0
+local device_scan_total = 0
+local function mark_parameter_scan_started()
+    pending_parameter_scans = pending_parameter_scans + 1
+    vb.views.status.text = string.format('Finding parameters... (%d)', pending_parameter_scans)
+end
+local function mark_parameter_scan_finished()
+    if (pending_parameter_scans > 0) then
+        pending_parameter_scans = pending_parameter_scans - 1
+    end
+    if (pending_parameter_scans == 0) then
+        vb.views.status.text = 'Done.'
+    else
+        vb.views.status.text = string.format('Finding parameters... (%d)', pending_parameter_scans)
+    end
+end
+
+-- known_devices_parameters is provided by the core module (see oversample_core.lua).
+
 
 -------------------------------------------------------------------------------
 -- Persistent parameter cache
@@ -56,25 +73,7 @@ local known_devices_parameters = {
 -- string ("<len>;<value>" blocks concatenated). This survives Renoise's XML
 -- serialization of renoise.song().tool_data without relying on delimiters
 -- that device/parameter names might contain.
-local function encode_field(str)
-  return string.len(str) .. ";" .. str
-end
-
-local function decode_fields(str)
-  local fields = {}
-  local i = 1
-  local len = string.len(str)
-  while (i <= len) do
-    local sep = string.find(str, ";", i, true)
-    if (not sep) then
-      break
-    end
-    local field_len = tonumber(string.sub(str, i, sep - 1)) or 0
-    table.insert(fields, string.sub(str, sep + 1, sep + field_len))
-    i = sep + 1 + field_len
-  end
-  return fields
-end
+-- encode_field / decode_fields are provided by the core module.
 
 -- In-memory mirror of the cache: [device_name] -> { parameter_name, ... }
 local cached_parameters = {}
@@ -144,24 +143,29 @@ function load_tool_cache()
   merge_cache_list(renoise.tool().preferences.cached_parameters)
   merge_name_list(renoise.tool().preferences.cached_device_names)
 
-  -- Per-song (travels with the .xrns file; overrides machine-wide).
-  local data = renoise.song().tool_data
-  if (data and data ~= "") then
-    local ok, err = pcall(function()
-      tool_cache_doc:from_string(data)
-    end)
-    if (not ok) then
-      print('Oversample: failed to load cache: ' .. tostring(err))
-      while (list_count(tool_cache_doc.parameters) > 0) do
-        tool_cache_doc.parameters:remove(1)
-      end
-      while (list_count(tool_cache_doc.device_names) > 0) do
-        tool_cache_doc.device_names:remove(1)
+  -- Per-song (travels with the .xrns file; overrides machine-wide). The song may
+  -- not exist yet while the tool is loaded at startup, before Renoise creates the
+  -- initial song, so guard against a nil song here.
+  local song = renoise.song()
+  if (song) then
+    local data = song.tool_data
+    if (data and data ~= "") then
+      local ok, err = pcall(function()
+        tool_cache_doc:from_string(data)
+      end)
+      if (not ok) then
+        print('Oversample: failed to load cache: ' .. tostring(err))
+        while (list_count(tool_cache_doc.parameters) > 0) do
+          tool_cache_doc.parameters:remove(1)
+        end
+        while (list_count(tool_cache_doc.device_names) > 0) do
+          tool_cache_doc.device_names:remove(1)
+        end
       end
     end
+    merge_cache_list(tool_cache_doc.parameters)
+    merge_name_list(tool_cache_doc.device_names)
   end
-  merge_cache_list(tool_cache_doc.parameters)
-  merge_name_list(tool_cache_doc.device_names)
 
   cache_dirty = false
   global_cache_dirty = false
@@ -262,28 +266,29 @@ local function collect_device_names()
   local names = {}
   local seen = {}
   local song = renoise.song()
+  local total_instances = 0
+  local active_instances = 0
+  local deduped = 0
   for t = 1, table.getn(song.tracks) do
     local track = song:track(t)
     for d = 1, table.getn(track.devices) do
       local device = track:device(d)
+      total_instances = total_instances + 1
+      if (device.is_active) then
+        active_instances = active_instances + 1
+      end
       if (device.is_active and not seen[device.name]) then
         seen[device.name] = true
         names[#names + 1] = device.name
+      elseif (device.is_active and seen[device.name]) then
+        deduped = deduped + 1
       end
     end
   end
   return names
 end
 
-local function same_name_set(a, b)
-  if (#a ~= #b) then return false end
-  local seen = {}
-  for _, v in ipairs(a) do seen[v] = true end
-  for _, v in ipairs(b) do
-    if (not seen[v]) then return false end
-  end
-  return true
-end
+-- same_name_set is provided by the core module.
 
 -- Lazily resolve the live device instances for a device name. The full device
 -- scan collects these once; afterwards we reuse the cached map, and if a name
@@ -391,7 +396,27 @@ function oversample_init()
   initialized = true
 
   load_tool_cache()
-  attach_song_device_notifiers()
+
+  -- The device notifiers need a live song, which may not exist yet while the tool
+  -- is being loaded at Renoise startup (before the initial song is created). Defer
+  -- them (and the per-song cache load) until a song is available.
+  local function init_song_dependencies()
+    load_tool_cache()
+    attach_song_device_notifiers()
+  end
+
+  if (renoise.song()) then
+    init_song_dependencies()
+  else
+    local idle_notifier
+    idle_notifier = function()
+      if (renoise.song()) then
+        init_song_dependencies()
+        renoise.tool().app_idle_observable:remove_notifier(idle_notifier)
+      end
+    end
+    renoise.tool().app_idle_observable:add_notifier(idle_notifier)
+  end
 
   -- Persist the cache right before the song is saved, but only when something
   -- actually changed. The global (preferences) copy travels with the tool
@@ -415,6 +440,8 @@ function oversample()
     if (dialog) then
         destroy()
     end
+
+    pending_parameter_scans = 0
 
     local oversample = vb:row {
         id = "org.bitbear.Oversample",
@@ -451,12 +478,33 @@ function oversample()
                     text = "Finding devices...",
                     width = COLUMN_WIDTH
                 },
-                vb:button {
-                    id = "set_values_button",
-                    text = "Set",
-                    width = HALF_COLUMN_WIDTH,
-                    active = false,
-                    notifier = set_values
+                vb:row {
+                    vb:button {
+                        id = "minimize_values_button",
+                        text = "Minimize",
+                        width = HALF_COLUMN_WIDTH,
+                        active = false,
+                        notifier = function()
+                            extreme_values("min")
+                        end
+                    },
+                    vb:button {
+                        id = "maximize_values_button",
+                        text = "Maximize",
+                        width = HALF_COLUMN_WIDTH,
+                        active = false,
+                        notifier = function()
+                            extreme_values("max")
+                        end
+                    },
+                    vb:button {
+                        id = "set_values_button",
+                        text = "Set",
+                        width = HALF_COLUMN_WIDTH,
+                        color = { 165, 73, 35 },
+                        active = false,
+                        notifier = set_values
+                    }
                 }
             }
         }
@@ -477,7 +525,10 @@ function oversample()
         cached_device_names = live_names
         devices_valid = true
         render_settings_rows(live_names)
-        vb.views.status.text = 'Done.'
+        -- Per-row parameter scans may still be running in the background.
+        if (pending_parameter_scans == 0) then
+            vb.views.status.text = 'Done.'
+        end
         return
     end
 
@@ -507,12 +558,16 @@ function destroy()
         local ids = create_settings_row_identifiers(i)
         vb.views[ids["device_popup_id"]] = nil
         vb.views[ids["parameter_popup_id"]] = nil
+        vb.views[ids["parameter_value_popup_id"]] = nil
         vb.views[ids["parameter_value_slider_id"]] = nil
+        vb.views[ids["parameter_value_secondary_popup_id"]] = nil
         vb.views[ids["settings_row_id"]] = nil
         vb.views[ids["add_button_id"]] = nil
     end
 
     vb.views["set_values_button"] = nil
+    vb.views["minimize_values_button"] = nil
+    vb.views["maximize_values_button"] = nil
     vb.views["status"] = nil
     vb.views["settings_container"] = nil
     vb.views["org.bitbear.Oversample"] = nil
@@ -533,7 +588,9 @@ function create_settings_row()
 
     local device_popup_id = settings_row_identifiers["device_popup_id"]
     local parameter_popup_id = settings_row_identifiers["parameter_popup_id"]
+    local parameter_value_popup_id = settings_row_identifiers["parameter_value_popup_id"]
     local parameter_value_slider_id = settings_row_identifiers["parameter_value_slider_id"]
+    local parameter_value_secondary_popup_id = settings_row_identifiers["parameter_value_secondary_popup_id"]
     local settings_row_id = settings_row_identifiers["settings_row_id"]
     local add_button_id = settings_row_identifiers["add_button_id"]
 
@@ -562,20 +619,68 @@ function create_settings_row()
                 parameter_selected(value, parameter_name, device_name, row_number)
             end,
         },
+        vb:popup {
+            id = parameter_value_popup_id,
+            width = HALF_COLUMN_WIDTH,
+            active = false,
+            visible = false,
+            notifier = function(value)
+                local ids = create_settings_row_identifiers(row_number)
+                local popup = vb.views[ids["parameter_value_popup_id"]]
+                local device_popup = vb.views[device_popup_id]
+                local device_name = device_popup.items[device_popup.value]
+                local device_instances = ensure_device_instances(device_name)
+                if (not device_instances[1]) then
+                    return
+                end
+                local choices = selected_devices[row_number]["parameter_choices"]
+                local v
+                if (choices and choices[value]) then
+                    v = choices[value].value
+                end
+                if (v ~= nil) then
+                    selected_devices[row_number]["parameter_value"] = v
+                end
+                update_secondary(row_number, device_name, device_instances)
+            end,
+        },
         vb:slider {
             id = parameter_value_slider_id,
             width = HALF_COLUMN_WIDTH,
             active = false,
             notifier = function(value)
-                print(value)
-                local parameter_value = vb.views[parameter_value_slider_id].value
-                local parameter_popup = vb.views[parameter_popup_id]
-                local parameter_name = parameter_popup.items[value]
-                local selected_parameter_index = parameter_popup.value
+                local parameter_value = value
+                local parameter_name = selected_devices[row_number]["parameter_name"]
                 local device_popup = vb.views[device_popup_id]
-                local selected_device_index = device_popup.value
-                local device_name = device_popup.items[selected_device_index]
+                local device_name = device_popup.items[device_popup.value]
                 parameter_value_changed(parameter_value, parameter_name, device_name, row_number)
+            end,
+        },
+        vb:popup {
+            id = parameter_value_secondary_popup_id,
+            width = HALF_COLUMN_WIDTH,
+            active = false,
+            visible = false,
+            notifier = function(value)
+                local ids = create_settings_row_identifiers(row_number)
+                local spopup = vb.views[ids["parameter_value_secondary_popup_id"]]
+                local device_popup = vb.views[device_popup_id]
+                local device_name = device_popup.items[device_popup.value]
+                local device_instances = ensure_device_instances(device_name)
+                if (not device_instances[1]) then
+                    return
+                end
+                local sec_index = selected_devices[row_number]["secondary_parameter_index"]
+                if (sec_index) then
+                    local choices = selected_devices[row_number]["secondary_parameter_choices"]
+                    local v
+                    if (choices and choices[value]) then
+                        v = choices[value].value
+                    end
+                    if (v ~= nil) then
+                        selected_devices[row_number]["secondary_parameter_value"] = v
+                    end
+                end
             end,
         },
         vb:button {
@@ -593,24 +698,19 @@ function create_settings_row()
     }
 end
 
-function create_settings_row_identifiers(row_number)
-    if (not row_number) then
-        row_number = settings_row_count
-    end
-
-    return {
-        ["device_popup_id"] = "devices_popup_" .. row_number,
-        ["parameter_popup_id"] = "parameters_popup_" .. row_number,
-        ["parameter_value_slider_id"] = "parameter_value_slider_" .. row_number,
-        ["settings_row_id"] = "settings_row_" .. row_number,
-        ["add_button_id"] = "add_button_" .. row_number
-    }
-end
+-- create_settings_row_identifiers is provided by the core module.
 
 function render_settings_rows(device_names)
     local container = vb.views.settings_container
     settings_row_count = 0
     device_popups = {}
+
+    local sorted_names = {}
+    for _, n in ipairs(device_names) do
+        sorted_names[#sorted_names + 1] = n
+    end
+    table.sort(sorted_names)
+    device_names = sorted_names
 
     local found = false
     for _, device_name in ipairs(device_names) do
@@ -650,34 +750,44 @@ function render_settings_rows(device_names)
         end
     end
 
-    vb.views["set_values_button"].active = true
+    set_main_buttons_active(true)
 end
 
 function add_device_items_init()
-    devices_valid = true
+    local ok, err = xpcall(function()
+        devices_valid = true
 
-    local device_items = {}
-    if (next(devices) ~= nil) then
-        for k, _ in pairs(devices) do
-            device_items[#device_items + 1] = k
+        local device_items = {}
+        if (next(devices) ~= nil) then
+            for k, _ in pairs(devices) do
+                device_items[#device_items + 1] = k
+            end
+        else
+            for _, n in ipairs(cached_device_names) do
+                device_items[#device_items + 1] = n
+            end
         end
-    else
-        for _, n in ipairs(cached_device_names) do
-            device_items[#device_items + 1] = n
+
+        table.sort(device_items)
+
+        cached_device_names = device_items
+        save_global_device_name_cache()
+
+        render_settings_rows(device_items)
+
+        -- Per-row parameter scans may still be running in the background.
+        if (pending_parameter_scans == 0) then
+            vb.views.status.text = 'Done.'
         end
+    end, debug.traceback)
+    if (not ok) then
+        print("OVERSAMPLE add_device_items_init ERROR:\n" .. tostring(err))
     end
-
-    cached_device_names = device_items
-    save_global_device_name_cache()
-
-    render_settings_rows(device_items)
-
-    vb.views.status.text = 'Done.'
 end
 
 function add_device_items(device_popup_id, selected_device_index)
     local device_items = {}
-    vb.views["set_values_button"].active = false
+    set_main_buttons_active(false)
 
     if (next(devices) ~= nil) then
         for k, _ in pairs(devices) do
@@ -688,6 +798,8 @@ function add_device_items(device_popup_id, selected_device_index)
             device_items[#device_items + 1] = n
         end
     end
+
+    table.sort(device_items)
 
     if (vb.views[device_popup_id]) then
         local devices_popup = vb.views[device_popup_id]
@@ -700,21 +812,108 @@ function add_device_items(device_popup_id, selected_device_index)
         print('Could not add items to "' .. device_popup_id .. '" as it does not exist.')
     end
 
-    vb.views["set_values_button"].active = true
-    vb.views.status.text = 'Done.'
+    set_main_buttons_active(true)
+    -- A parameter scan may still be running in the background.
+    if (pending_parameter_scans == 0) then
+        vb.views.status.text = 'Done.'
+    end
 end
 
 -- Set the value slider's range/current value from a resolved parameter index.
-local function set_slider(row_number, device_instances, parameter_index)
-    local device = device_instances[1]
-    local parameter = device:parameter(parameter_index)
-    local settings_row_identifiers = create_settings_row_identifiers(row_number)
-    local slider = vb.views[settings_row_identifiers["parameter_value_slider_id"]]
+-- A parameter is treated as an enum (dropdown) when it exposes a small set of
+-- named, distinct values. Some plugins report the steps with value_quantum == 1
+-- (the easy case); others expose enums over a normalised range whose
+-- value_quantum is fractional, in which case we check whether the endpoint
+-- values map to real (non-numeric) names like "Zero Latency" / "Linear Phase".
+-- A parameter is an enum when it exposes a small number of discrete, named
+-- values. We detect this without mutating the plugin: a finite step count
+-- (value_quantum-based) AND a non-numeric label for the current value.
+-- A parameter is treated as an enum (dropdown) when it exposes a small number
+-- of distinct, named values. Renoise does not expose enum labels directly, and
+-- some enums report value_quantum == 0 (so the step count is unavailable), so
+-- we enumerate the distinct labels by stepping the value and reading back the
+-- snapped true value. A parameter with 2..64 distinct labels is an enum; one
+-- with more (a continuous parameter) is a slider. The result is cached.
+local parameter_choices_cache = {}
 
-    slider.min = parameter.value_min
-    slider.max = parameter.value_max
-    slider.value = parameter.value
-    slider.active = true
+local function parameter_choices(parameter)
+    local min_v = parameter.value_min
+    local max_v = parameter.value_max
+    local q = parameter.value_quantum
+
+    local cache_key
+    if (q and q > 0) then
+        cache_key = parameter.name .. "\0" .. min_v .. "\0" .. max_v .. "\0" .. q
+    else
+        cache_key = parameter.name .. "\0" .. min_v .. "\0" .. max_v .. "\0q0"
+    end
+    if (parameter_choices_cache[cache_key]) then
+        return parameter_choices_cache[cache_key]
+    end
+
+    local probe
+    if (q and q > 0) then
+        probe = math.floor((max_v - min_v) / q + 0.5)
+        if (probe < 2) then
+            probe = 2
+        end
+        if (probe > 256) then
+            probe = 256
+        end
+    else
+        -- value_quantum == 0: scan at a fixed resolution to discover the
+        -- discrete labels. 128 probes is enough to capture the steps of any
+        -- reasonable enum while staying cheap.
+        probe = 128
+    end
+
+    local original = parameter.value
+    local choices = {}
+    local seen = {}
+    for k = 0, probe do
+        local v
+        if (q and q > 0) then
+            v = min_v + k * q
+        else
+            v = min_v + (max_v - min_v) * (k / probe)
+        end
+        local ok, s, tv = pcall(function()
+            parameter.value = v
+            return parameter.value_string, parameter.value
+        end)
+        if (ok and type(s) == "string") then
+            local label = s:match("^%s*(.-)%s*$")
+            if (label ~= "" and not seen[label]) then
+                seen[label] = true
+                choices[#choices + 1] = { value = tv, label = label }
+            end
+        end
+    end
+    pcall(function()
+        parameter.value = original
+    end)
+    parameter_choices_cache[cache_key] = choices
+    return choices
+end
+
+-- An enum (dropdown) is any parameter with a small set of distinct labels.
+local function is_parameter_enum(parameter)
+    local choices = parameter_choices(parameter)
+    return #choices >= 2 and #choices <= 64
+end
+
+-- known_primary / known_secondary are provided by the core module.
+
+-- A dependent secondary is shown only when the primary parameter's current
+-- value matches this string (Pro-Q: "Processing Resolution" appears once
+-- "Processing Mode" is set to "Linear Phase").
+local SECONDARY_SHOW_WHEN = 'Linear Phase'
+
+local function loose_eq(a, b)
+    local function t(s)
+        return tostring(s):lower():match("^%s*(.-)%s*$")
+    end
+    return t(a) == t(b)
 end
 
 -- Resolve a known parameter name to its index within a list of parameter
@@ -722,25 +921,126 @@ end
 -- exactly first, then case-insensitively (ignoring surrounding whitespace),
 -- then by substring (the known name appearing inside the real name). The last
 -- fallback catches e.g. "Oversampling" vs "Oversampling Rate".
-local function match_parameter(names, target)
-    local tl = tostring(target):lower():match("^%s*(.-)%s*$")
+-- match_parameter is provided by the core module.
 
-    for i, n in ipairs(names) do
-        if (n == target) then
-            return i
-        end
+-- Show/hide and populate the dependent secondary dropdown. Only relevant when
+-- the selected parameter is the device's known primary and its value equals
+-- nearest_choice_index is provided by the core module.
+
+-- SECONDARY_SHOW_WHEN.
+function update_secondary(row_number, device_name, device_instances)
+    local ids = create_settings_row_identifiers(row_number)
+    local sec_popup = vb.views[ids["parameter_value_secondary_popup_id"]]
+    local sec_name = known_secondary(device_name)
+    local primary_name = known_primary(device_name)
+
+    local function hide_secondary()
+        sec_popup.visible = false
+        selected_devices[row_number]["secondary_parameter_index"] = nil
+        selected_devices[row_number]["secondary_parameter_value"] = nil
+        selected_devices[row_number]["secondary_parameter_name"] = nil
     end
-    for i, n in ipairs(names) do
-        if (tostring(n):lower():match("^%s*(.-)%s*$") == tl) then
-            return i
-        end
+
+    if (not sec_name or not primary_name) then
+        hide_secondary()
+        return
     end
-    for i, n in ipairs(names) do
-        if (tostring(n):lower():find(tl, 1, true)) then
-            return i
-        end
+    if (selected_devices[row_number]["parameter_name"] ~= primary_name) then
+        hide_secondary()
+        return
     end
-    return nil
+
+    local device = device_instances[1]
+    local primary_index = selected_devices[row_number]["parameter_index"]
+    if (not primary_index or not device) then
+        hide_secondary()
+        return
+    end
+    local primary_param = device:parameter(primary_index)
+    -- Use the intended value (what the user picked in the dropdown), not the
+    -- plugin's possibly-stale live value, so the secondary appears as soon as
+    -- "Linear Phase" is selected rather than only after "Set" is applied.
+    local intended_value = selected_devices[row_number]["parameter_value"]
+    if (intended_value == nil) then
+        intended_value = primary_param.value
+    end
+
+    local pchoices = parameter_choices(primary_param)
+    local primary_label
+    if (#pchoices > 0) then
+        primary_label = pchoices[nearest_choice_index(pchoices, intended_value)].label
+    end
+
+    if (not primary_label or not loose_eq(primary_label, SECONDARY_SHOW_WHEN)) then
+        hide_secondary()
+        return
+    end
+
+    local names = {}
+    local count = count_parameters(device)
+    for p = 1, count do
+        names[p] = device:parameter(p).name
+    end
+    local sec_index = match_parameter(names, sec_name)
+    if (not sec_index) then
+        hide_secondary()
+        return
+    end
+
+    local sec_param = device:parameter(sec_index)
+    local sec_choices = parameter_choices(sec_param)
+    local sec_labels = {}
+    for i, c in ipairs(sec_choices) do
+        sec_labels[i] = c.label
+    end
+    local sec_idx = nearest_choice_index(sec_choices, sec_param.value)
+    sec_popup.items = sec_labels
+    sec_popup.value = sec_idx
+    sec_popup.active = true
+    sec_popup.visible = true
+    selected_devices[row_number]["secondary_parameter_index"] = sec_index
+    selected_devices[row_number]["secondary_parameter_name"] = sec_param.name
+    selected_devices[row_number]["secondary_parameter_value"] = sec_param.value
+    selected_devices[row_number]["secondary_parameter_choices"] = sec_choices
+end
+
+-- Populate the value control (dropdown for enums, slider otherwise) for the
+-- chosen parameter, and refresh any dependent secondary control.
+local function set_value_control(row_number, device_name, device_instances, parameter_index)
+    local device = device_instances[1]
+    local parameter = device:parameter(parameter_index)
+    local ids = create_settings_row_identifiers(row_number)
+    local popup = vb.views[ids["parameter_value_popup_id"]]
+    local slider = vb.views[ids["parameter_value_slider_id"]]
+
+    selected_devices[row_number]["parameter_index"] = parameter_index
+    selected_devices[row_number]["parameter_name"] = parameter.name
+    selected_devices[row_number]["parameter_value"] = parameter.value
+
+    if (is_parameter_enum(parameter)) then
+        local choices = parameter_choices(parameter)
+        local labels = {}
+        for i, c in ipairs(choices) do
+            labels[i] = c.label
+        end
+        local idx = nearest_choice_index(choices, parameter.value)
+        popup.items = labels
+        popup.value = idx
+        popup.active = true
+        popup.visible = true
+        slider.visible = false
+        selected_devices[row_number]["parameter_choices"] = choices
+    else
+        slider.min = parameter.value_min
+        slider.max = parameter.value_max
+        slider.value = parameter.value
+        slider.active = true
+        slider.visible = true
+        popup.visible = false
+        selected_devices[row_number]["parameter_choices"] = nil
+    end
+
+    update_secondary(row_number, device_name, device_instances)
 end
 
 -- Update the value slider for a chosen parameter without scanning the whole
@@ -754,7 +1054,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
         return
     end
 
-    local count = table.getn(device.parameters)
+    local count = count_parameters(device)
     local names = {}
     for p = 1, count do
         names[p] = device:parameter(p).name
@@ -767,18 +1067,18 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
 
     selected_devices[row_number]["parameter_name"] = device:parameter(parameter_index).name
     selected_devices[row_number]["parameter_index"] = parameter_index
-    set_slider(row_number, device_instances, parameter_index)
+    set_value_control(row_number, device_name, device_instances, parameter_index)
 end
 
 function device_selected(device_index, device_name, parameter_popup_id, row_number)
-    vb.views["set_values_button"].active = false
+    set_main_buttons_active(false)
     selected_devices[row_number] = {
          ["device_name"] = device_name,
          ["device_index"] = device_index
     }
     -- print('device_selected')
 
-    local known_parameters = known_devices_parameters[device_name]
+    local known_primary_name = known_primary(device_name)
     local parameters_popup = vb.views[parameter_popup_id]
 
     -- Populate the parameter dropdown from the (already known) full list, then
@@ -813,45 +1113,42 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
         parameters_popup.items = parameters
         parameters_popup.active = true
 
-        if (known_parameters) then
-            local target = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
-            local i = match_parameter(parameters, target)
+        if (known_primary_name) then
+            local i = match_parameter(parameters, known_primary_name)
             if (i) then
                 parameters_popup.value = i
             end
         end
 
-        vb.views.status.text = 'Done.'
-        vb.views["set_values_button"].active = true
+        mark_parameter_scan_finished()
+        set_main_buttons_active(true)
     end
 
     if (cached_parameters[device_name]) then
         -- Already cached (this session, song, or a previous run): no scan.
         apply_parameters(cached_parameters[device_name])
-        if (known_parameters) then
-            local known_name = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
-            apply_parameter_value(row_number, device_name, known_name)
+        if (known_primary_name) then
+            apply_parameter_value(row_number, device_name, known_primary_name)
         end
         return
     end
 
     -- Not cached yet: show the recognised parameter(s) immediately so the user
     -- can act at once, then run the one-time scan to back-fill the rest.
-    if (known_parameters) then
-        local items = (type(known_parameters) == "string") and { known_parameters } or { table.unpack(known_parameters) }
-        local known_name = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
+    if (known_primary_name) then
+        local items = { known_primary_name }
         parameters_popup.items = items
         parameters_popup.value = 1
         parameters_popup.active = true
         -- Reflect the known parameter's current value on the slider right away,
         -- without waiting for the full parameter scan to complete.
-        apply_parameter_value(row_number, device_name, known_name)
-        vb.views.status.text = 'Ready.'
-        vb.views["set_values_button"].active = true
+        apply_parameter_value(row_number, device_name, known_primary_name)
+        set_main_buttons_active(true)
     else
         vb.views.status.text = 'Finding parameters...'
     end
 
+    mark_parameter_scan_started()
     local slicer = ProcessSlicer(enumerate_parameters, function(return_value)
         apply_parameters(return_value[1])
     end, device_name)
@@ -862,32 +1159,16 @@ end
 
 -- Set the value slider's range/current value from a resolved parameter index.
 function parameter_selected(parameter_index, parameter_name, device_name, row_number)
-    print('parameter_selected:' .. device_name)
     local device_instances = ensure_device_instances(device_name)
     selected_devices[row_number]["parameter_name"] = parameter_name
     selected_devices[row_number]["parameter_index"] = parameter_index
 
     for k, v in ipairs(device_instances) do
-        vb.views["set_values_button"].active = false
-        set_slider(row_number, device_instances, parameter_index)
+        set_main_buttons_active(false)
+        set_value_control(row_number, device_name, device_instances, parameter_index)
     end
 
-    local device = device_instances[1]
-    if (device) then
-        local parameter = device:parameter(parameter_index)
-        print(("        %s[%d]: %d, min(%d), $max(%d), quantum(%d), default(%d), string(%s)."):format(
-            parameter.name,
-            parameter_index,
-            parameter.value,
-            parameter.value_min,
-            parameter.value_max,
-            parameter.value_quantum,
-            parameter.value_default,
-            parameter.value_string
-        ))
-    end
-
-    vb.views["set_values_button"].active = true
+    set_main_buttons_active(true)
 end
 
 function parameter_value_changed(parameter_value, parameter_name, device_name, row_number)
@@ -895,70 +1176,94 @@ function parameter_value_changed(parameter_value, parameter_name, device_name, r
 end
 
 function enumerate_tracks()
-    -- print('enumerate_tracks')
-    local song = renoise.song()
+    local ok, err = xpcall(function()
+        -- print('enumerate_tracks')
+        local song = renoise.song()
 
-    for t = 1, table.getn(song.tracks) do
-        vb.views["set_values_button"].active = false
-
-        if (dialog and not dialog.visible) then
-            print('Dialog closed, stopping.')
-            return
+        -- Count the total number of active devices up front so the scan can show
+        -- "Scanning devices… (k/total)" progress instead of flickering names.
+        device_scan_total = 0
+        device_scan_count = 0
+        for t = 1, table.getn(song.tracks) do
+            local track = song:track(t)
+            for d = 1, table.getn(track.devices) do
+                if (track:device(d).is_active) then
+                    device_scan_total = device_scan_total + 1
+                end
+            end
         end
 
-        local track = song:track(t)
+        for t = 1, table.getn(song.tracks) do
+            set_main_buttons_active(false)
 
-        -- print(track.name)
+            if (dialog and not dialog.visible) then
+                print('Dialog closed, stopping.')
+                return
+            end
 
-        -- print('enumerate_tracks:ProcessSlicer:init')
-        local slicer = ProcessSlicer(enumerate_devices, nil, track)
+            local track = song:track(t)
 
-        -- print('enumerate_tracks:ProcessSlicer:start')
-        slicer:start()
+            -- print(track.name)
 
-        coroutine.yield()
+            -- print('enumerate_tracks:ProcessSlicer:init')
+            local slicer = ProcessSlicer(enumerate_devices, nil, track)
+
+            -- print('enumerate_tracks:ProcessSlicer:start')
+            slicer:start()
+
+            coroutine.yield()
+        end
+
+        set_main_buttons_active(true)
+    end, debug.traceback)
+    if (not ok) then
+        print("OVERSAMPLE enumerate_tracks ERROR:\n" .. tostring(err))
     end
-
-    vb.views["set_values_button"].active = true
 end
 
 function enumerate_devices(track)
-    vb.views["set_values_button"].active = false
+    local ok, err = xpcall(function()
+        set_main_buttons_active(false)
 
-    for d = 1, table.getn(track.devices) do
-        if (dialog and not dialog.visible) then
-            print('Dialog closed, stopping.')
-            return
-        end
-
-        local device = track:device(d)
-
-        if (device.is_active) then
-            vb.views.status.text = track.name .. ': ' .. device.name
-
-            if (not devices[device.name]) then
-                -- print('Resetting device "' .. device.name .. '".')
-                devices[device.name] = {}
+        for d = 1, table.getn(track.devices) do
+            if (dialog and not dialog.visible) then
+                print('Dialog closed, stopping.')
+                return
             end
 
-            if (not devices[device.name]["instances"]) then
-                -- print('Resetting device instances for "' .. device.name .. '".')
-                devices[device.name]["instances"] = {}
+            local device = track:device(d)
+
+            if (device.is_active) then
+                device_scan_count = device_scan_count + 1
+                vb.views.status.text = string.format('Scanning devices... (%d/%d)', device_scan_count, device_scan_total)
+
+                if (not devices[device.name]) then
+                    -- print('Resetting device "' .. device.name .. '".')
+                    devices[device.name] = {}
+                end
+
+                if (not devices[device.name]["instances"]) then
+                    -- print('Resetting device instances for "' .. device.name .. '".')
+                    devices[device.name]["instances"] = {}
+                end
+
+                table.insert(devices[device.name]["instances"], device)
+
+                -- Invalidate the cache if this plugin's preset (and thus possibly
+                -- its parameter list) changes while the song is open.
+                pcall(function()
+                  device.active_preset_observable:remove_notifier(on_device_preset_changed)
+                  device.active_preset_observable:add_notifier(function()
+                    on_device_preset_changed(device)
+                  end)
+                end)
             end
 
-            table.insert(devices[device.name]["instances"], device)
-
-            -- Invalidate the cache if this plugin's preset (and thus possibly
-            -- its parameter list) changes while the song is open.
-            pcall(function()
-              device.active_preset_observable:remove_notifier(on_device_preset_changed)
-              device.active_preset_observable:add_notifier(function()
-                on_device_preset_changed(device)
-              end)
-            end)
+            coroutine.yield()
         end
-
-        coroutine.yield()
+    end, debug.traceback)
+    if (not ok) then
+        print("OVERSAMPLE enumerate_devices ERROR:\n" .. tostring(err))
     end
 end
 
@@ -974,13 +1279,6 @@ function get_parameters(device_name)
         if (device and #cached == count_parameters(device)
             and #cached > 0 and type(cached[1]) == "string"
             and not cached[1]:match("^%(parameter %d+%)$")) then
-            print('Returning cached parameters for "' .. device_name .. '".')
-            if (device_name:find("Pro%-L 2")) then
-                print("Oversample DEBUG " .. device_name .. " (cached): count=" .. #cached)
-                for i, n in ipairs(cached) do
-                    print("  [" .. i .. "] " .. tostring(n))
-                end
-            end
             return cached
         end
         cached_parameters[device_name] = nil
@@ -1040,22 +1338,17 @@ function get_parameters(device_name)
         global_cache_dirty = true
     end
 
-    -- TEMP DEBUG: dump FabFilter Pro-L 2 parameter names so we can confirm the
-    -- exact oversampling parameter (the VST3 build exposes fewer parameters).
-    if (device_name:find("Pro%-L 2")) then
-        print("Oversample DEBUG " .. device_name .. ": count=" .. #parameters)
-        for i, n in ipairs(parameters) do
-            print("  [" .. i .. "] " .. tostring(n))
-        end
-    end
-
     return parameters
 end
 
 -- Count a plugin's exposed parameters by probing until device:parameter(p)
 -- raises (the true end of the list). Used to validate cached lists, since the
 -- length operator ('#') can under-report the count for some VST3 plugins.
-local function count_parameters(device)
+-- Count the parameters a device actually exposes by probing device:parameter(p)
+-- until it raises. Declared global (not local) because get_parameters,
+-- apply_parameter_value and enumerate_parameters are defined before this point and
+-- call it; a forward reference to a local would resolve to nil and crash.
+function count_parameters(device)
     local n = 0
     local p = 1
     while (p <= 4096) do
@@ -1074,21 +1367,179 @@ end
 function enumerate_parameters(device_name)
     -- print('enumerate_parameters')
     if (dialog and dialog.visible and vb.views["set_values_button"]) then
-        vb.views["set_values_button"].active = false
+        set_main_buttons_active(false)
     end
 
     local parameters = get_parameters(device_name)
 
     if (dialog and dialog.visible and vb.views["set_values_button"]) then
-        vb.views["set_values_button"].active = true
+        set_main_buttons_active(true)
     end
 
     return parameters
 end
 
+-- Set every parameter of every device listed in the grid to its minimum ("min")
+-- or maximum ("max") value. Used by the Minimize / Maximize buttons. Applies
+-- directly to the plugin (no automation write) and is wrapped in pcall so a
+-- read-only or otherwise un-settable parameter is simply skipped.
+function extreme_values(extreme)
+    set_main_buttons_active(false)
+
+    local verb = (extreme == "min") and "minimum" or "maximum"
+    if (vb.views.status) then
+        vb.views.status.text = 'Setting parameter values to ' .. verb .. '...'
+    end
+
+    local n = 0
+    local processed = 0
+
+    -- Gather the exact parameter indices we intend to touch for a given device
+    -- instance: the device's *known* oversampling parameter(s) plus whatever this
+    -- row has selected. Returns an array (not a set) so it is easy to count.
+    local function collect_target_indices(device, device_name, selected_device)
+        -- Build the plain name list (a pure array) and let the core module decide
+        -- which indices to touch: the device's known oversampling parameter(s) plus
+        -- this row's selected primary/secondary, de-duplicated.
+        local count = count_parameters(device)
+        local parameter_names = {}
+        for p = 1, count do
+            parameter_names[p] = device:parameter(p).name
+        end
+        return core.resolve_target_indices(parameter_names, device_name, selected_device)
+    end
+
+    -- Pre-count the total number of writes so we can show progress in the status bar.
+    local total = 0
+    for row_number, selected_device in ipairs(selected_devices) do
+        local device_name = selected_device["device_name"]
+        if (device_name) then
+            local device_instances = ensure_device_instances(device_name)
+            if (#device_instances > 0) then
+                local targets = collect_target_indices(device_instances[1], device_name, selected_device)
+                total = total + #device_instances * #targets
+            end
+        end
+    end
+
+    -- Run the (potentially long) write loop in a sliced coroutine so the dialog
+    -- stays responsive instead of freezing for the whole song.
+    local function process()
+        if (dialog and not dialog.visible) then
+            return
+        end
+        for row_number, selected_device in ipairs(selected_devices) do
+            local device_name = selected_device["device_name"]
+            if (device_name) then
+                local device_instances = ensure_device_instances(device_name)
+                for i, device in ipairs(device_instances) do
+                    local targets = collect_target_indices(device, device_name, selected_device)
+
+                    for _, idx in ipairs(targets) do
+                        local parameter = device:parameter(idx)
+                        local target = (extreme == "min") and parameter.value_min or parameter.value_max
+                        -- Skip redundant writes: avoids firing value notifiers and
+                        -- re-scanning for parameters already at the extreme.
+                        local ok = pcall(function()
+                            if (math.abs(parameter.value - target) > 1e-6) then
+                                parameter.value = target
+                            end
+                        end)
+                        if (ok) then
+                            n = n + 1
+                        end
+                        processed = processed + 1
+                        if (vb.views.status) then
+                            if (total > 0) then
+                                vb.views.status.text = string.format(
+                                    'Setting parameter values to %s... (%d/%d)', verb, processed, total)
+                            else
+                                vb.views.status.text = 'Setting parameter values to ' .. verb .. '...'
+                            end
+                        end
+                    end
+
+                    coroutine.yield()
+                end
+            end
+        end
+    end
+
+    -- Re-sync the grid once the writes are done: the live device parameters changed
+    -- but the row controls are not auto-notified, so update every displayed row
+    -- (dropdowns + sliders, including any dependent secondary parameter like Pro-Q's
+    -- Processing Resolution), then re-enable the buttons.
+    local function done()
+        if (dialog and dialog.visible) then
+            for row_number, selected_device in ipairs(selected_devices) do
+                local device_name = selected_device["device_name"]
+                local parameter_index = selected_device["parameter_index"]
+                if (device_name and parameter_index) then
+                    local device_instances = ensure_device_instances(device_name)
+                    if (#device_instances > 0) then
+                        local ok, err = pcall(function()
+                            set_value_control(row_number, device_name, device_instances, parameter_index)
+                        end)
+                        if (not ok) then
+                            print("OVERSAMPLE set_value_control error row " .. row_number .. ": " .. tostring(err))
+                        end
+                    end
+                end
+            end
+            if (vb.views.status) then
+                vb.views.status.text = n .. ' parameter values set to ' .. verb .. '.'
+            end
+        end
+        set_main_buttons_active(true)
+    end
+
+    local slicer = ProcessSlicer(process, done)
+    slicer:start()
+end
+
+-- Enable/disable the three action buttons (Set, Minimize, Maximize) together,
+-- mirroring the "Set" button's active state used while scans are in flight.
+-- Declared global (not local) because it is invoked from several top-level
+-- functions (enumerate_tracks, enumerate_devices, add_device_items, render_settings_rows…)
+-- that are defined before this point; a forward reference to a local would resolve
+-- to the global environment (nil) and crash the scan.
+function set_main_buttons_active(active)
+    if (not vb or not vb.views) then
+        return
+    end
+    for _, id in ipairs({ "set_values_button", "minimize_values_button", "maximize_values_button" }) do
+        local view = vb.views[id]
+        if (view) then
+            pcall(function()
+                view.active = active
+            end)
+        end
+    end
+
+    -- Disable every control in the grid while an action (Set/Minimize/Maximize) or a
+    -- background scan is in flight, so the user can't edit rows mid-operation.
+    for r = 1, settings_row_count do
+        local ids = create_settings_row_identifiers(r)
+        for _, key in ipairs({
+            "device_popup_id",
+            "parameter_popup_id",
+            "parameter_value_popup_id",
+            "parameter_value_slider_id",
+            "parameter_value_secondary_popup_id",
+            "add_button_id"
+        }) do
+            local view = vb.views[ids[key]]
+            if (view) then
+                pcall(function()
+                    view.active = active
+                end)
+            end
+        end
+    end
+end
+
 function set_values()
-    local set_values_button = vb.views["set_values_button"]
-    set_values_button.active = false
+    set_main_buttons_active(false)
     local parameters_changed = 0
 
     for row_number, selected_device in ipairs(selected_devices) do
@@ -1102,13 +1553,14 @@ function set_values()
         end
 
         for i, device in ipairs(device_instances) do
+            local count = count_parameters(device)
             local parameter_index = selected_device["parameter_index"]
 
             -- Resolve by name when known: robust to index drift and to the
             -- "known parameter shown first" fast path, where the index is only
             -- valid within the short known-only list.
             if (parameter_name) then
-                for p = 1, table.getn(device.parameters) do
+                for p = 1, count_parameters(device) do
                     if (device:parameter(p).name == parameter_name) then
                         parameter_index = p
                         break
@@ -1116,10 +1568,32 @@ function set_values()
                 end
             end
 
-            local parameter = device:parameter(parameter_index)
+            if (parameter_index and parameter_index >= 1 and parameter_index <= count) then
+                local parameter = device:parameter(parameter_index)
+                parameter:record_value(parameter_value)
+                parameters_changed = parameters_changed + 1
+            end
 
-            parameter:record_value(parameter_value)
-            parameters_changed = parameters_changed + 1
+            -- Apply the dependent secondary parameter (e.g. Pro-Q's
+            -- "Processing Resolution"), resolved by name for robustness.
+            local sec_index = selected_device["secondary_parameter_index"]
+            local sec_value = selected_device["secondary_parameter_value"]
+            local sec_name = selected_device["secondary_parameter_name"]
+            if (sec_index and sec_value ~= nil) then
+                local sidx = sec_index
+                if (sec_name) then
+                    for p = 1, count_parameters(device) do
+                        if (device:parameter(p).name == sec_name) then
+                            sidx = p
+                            break
+                        end
+                    end
+                end
+                if (sidx and sidx >= 1 and sidx <= count) then
+                    device:parameter(sidx):record_value(sec_value)
+                    parameters_changed = parameters_changed + 1
+                end
+            end
         end
     end
 
@@ -1127,5 +1601,5 @@ function set_values()
     local button_text = nil
 
     vb.views.status.text = parameters_changed .. ' parameter values set.'
-    set_values_button.active = true
+    set_main_buttons_active(true)
 end
