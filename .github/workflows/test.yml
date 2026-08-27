@@ -1,0 +1,16 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Lua 5.1
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.1
+        lua5.1 -v
+    - name: Run unit tests
+      run: lua5.1 test/oversample_core_test.lua
