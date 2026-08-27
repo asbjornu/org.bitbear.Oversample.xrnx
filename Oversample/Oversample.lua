@@ -1006,7 +1006,11 @@ end
 
 -- Populate the value control (dropdown for enums, slider otherwise) for the
 -- chosen parameter, and refresh any dependent secondary control.
-local function set_value_control(row_number, device_name, device_instances, parameter_index)
+-- Populate the value control (dropdown for enums, slider otherwise) for the
+-- chosen parameter using an explicit target value, and refresh any dependent
+-- secondary control. Used both when reflecting a live device value and when
+-- previewing an extreme (min/max) value in the UI without touching the device.
+local function apply_value_to_control(row_number, device_name, device_instances, parameter_index, target_value)
     local device = device_instances[1]
     local parameter = device:parameter(parameter_index)
     local ids = create_settings_row_identifiers(row_number)
@@ -1015,7 +1019,7 @@ local function set_value_control(row_number, device_name, device_instances, para
 
     selected_devices[row_number]["parameter_index"] = parameter_index
     selected_devices[row_number]["parameter_name"] = parameter.name
-    selected_devices[row_number]["parameter_value"] = parameter.value
+    selected_devices[row_number]["parameter_value"] = target_value
 
     if (is_parameter_enum(parameter)) then
         local choices = parameter_choices(parameter)
@@ -1023,7 +1027,7 @@ local function set_value_control(row_number, device_name, device_instances, para
         for i, c in ipairs(choices) do
             labels[i] = c.label
         end
-        local idx = nearest_choice_index(choices, parameter.value)
+        local idx = nearest_choice_index(choices, target_value)
         popup.items = labels
         popup.value = idx
         popup.active = true
@@ -1033,7 +1037,7 @@ local function set_value_control(row_number, device_name, device_instances, para
     else
         slider.min = parameter.value_min
         slider.max = parameter.value_max
-        slider.value = parameter.value
+        slider.value = target_value
         slider.active = true
         slider.visible = true
         popup.visible = false
@@ -1041,6 +1045,14 @@ local function set_value_control(row_number, device_name, device_instances, para
     end
 
     update_secondary(row_number, device_name, device_instances)
+end
+
+-- Reflect a device's current parameter value in the UI (the default behaviour
+-- used after scans and after "Set" is applied).
+local function set_value_control(row_number, device_name, device_instances, parameter_index)
+    local device = device_instances[1]
+    local parameter = device:parameter(parameter_index)
+    apply_value_to_control(row_number, device_name, device_instances, parameter_index, parameter.value)
 end
 
 -- Update the value slider for a chosen parameter without scanning the whole
@@ -1379,116 +1391,109 @@ function enumerate_parameters(device_name)
     return parameters
 end
 
--- Set every parameter of every device listed in the grid to its minimum ("min")
--- or maximum ("max") value. Used by the Minimize / Maximize buttons. Applies
--- directly to the plugin (no automation write) and is wrapped in pcall so a
--- read-only or otherwise un-settable parameter is simply skipped.
+-- Preview the minimum ("min") or maximum ("max") value of every relevant
+-- parameter in the grid by moving the UI controls only. Nothing is written to the
+-- plugin here; the separate "Set" button applies the resulting UI state to the
+-- devices. This lets the user see the extreme before committing it.
 function extreme_values(extreme)
     set_main_buttons_active(false)
 
     local verb = (extreme == "min") and "minimum" or "maximum"
     if (vb.views.status) then
-        vb.views.status.text = 'Setting parameter values to ' .. verb .. '...'
+        vb.views.status.text = 'Setting controls to ' .. verb .. '...'
     end
 
-    local n = 0
-    local processed = 0
-
-    -- Gather the exact parameter indices we intend to touch for a given device
-    -- instance: the device's *known* oversampling parameter(s) plus whatever this
-    -- row has selected. Returns an array (not a set) so it is easy to count.
-    local function collect_target_indices(device, device_name, selected_device)
-        -- Build the plain name list (a pure array) and let the core module decide
-        -- which indices to touch: the device's known oversampling parameter(s) plus
-        -- this row's selected primary/secondary, de-duplicated.
-        local count = count_parameters(device)
-        local parameter_names = {}
-        for p = 1, count do
-            parameter_names[p] = device:parameter(p).name
-        end
-        return core.resolve_target_indices(parameter_names, device_name, selected_device)
-    end
-
-    -- Pre-count the total number of writes so we can show progress in the status bar.
-    local total = 0
+    -- Collect the rows that have a device so we can report progress and avoid
+    -- re-scanning inside the sliced loop.
+    local work = {}
     for row_number, selected_device in ipairs(selected_devices) do
         local device_name = selected_device["device_name"]
         if (device_name) then
             local device_instances = ensure_device_instances(device_name)
             if (#device_instances > 0) then
-                local targets = collect_target_indices(device_instances[1], device_name, selected_device)
-                total = total + #device_instances * #targets
+                work[#work + 1] = { row_number, device_name, device_instances }
             end
         end
     end
 
-    -- Run the (potentially long) write loop in a sliced coroutine so the dialog
-    -- stays responsive instead of freezing for the whole song.
+    local processed = 0
+    local total = #work
+
+    -- Set a dependent secondary popup to an explicit target value. Mirrors the
+    -- secondary half of update_secondary but uses a value we choose rather than
+    -- reading the device.
+    local function apply_secondary_value_to_control(row_number, device_instances, sec_index, target_value)
+        local device = device_instances[1]
+        local sec_param = device:parameter(sec_index)
+        local ids = create_settings_row_identifiers(row_number)
+        local spopup = vb.views[ids["parameter_value_secondary_popup_id"]]
+        local sec_choices = selected_devices[row_number]["secondary_parameter_choices"]
+        if (not sec_choices) then
+            sec_choices = parameter_choices(sec_param)
+        end
+        local sec_labels = {}
+        for i, c in ipairs(sec_choices) do
+            sec_labels[i] = c.label
+        end
+        local sec_idx = nearest_choice_index(sec_choices, target_value)
+        spopup.items = sec_labels
+        spopup.value = sec_idx
+        spopup.active = true
+        spopup.visible = true
+        selected_devices[row_number]["secondary_parameter_index"] = sec_index
+        selected_devices[row_number]["secondary_parameter_name"] = sec_param.name
+        selected_devices[row_number]["secondary_parameter_value"] = target_value
+        selected_devices[row_number]["secondary_parameter_choices"] = sec_choices
+    end
+
+    -- Move the primary value control (and any revealed dependent secondary) for
+    -- one row to the requested extreme, purely in the UI.
+    local function display_extreme(row_number, device_name, device_instances)
+        local parameter_index = selected_devices[row_number]["parameter_index"]
+        if (not parameter_index) then
+            return
+        end
+        local device = device_instances[1]
+        local parameter = device:parameter(parameter_index)
+        local target = (extreme == "min") and parameter.value_min or parameter.value_max
+        apply_value_to_control(row_number, device_name, device_instances, parameter_index, target)
+
+        -- The new primary value may reveal a dependent secondary (e.g. Pro-Q's
+        -- "Processing Resolution"); if so, preview it at the same extreme.
+        local sec_index = selected_devices[row_number]["secondary_parameter_index"]
+        if (sec_index) then
+            local sec_param = device:parameter(sec_index)
+            local sec_target = (extreme == "min") and sec_param.value_min or sec_param.value_max
+            apply_secondary_value_to_control(row_number, device_instances, sec_index, sec_target)
+        end
+    end
+
+    -- Run the UI update in a sliced coroutine so the dialog stays responsive.
     local function process()
         if (dialog and not dialog.visible) then
             return
         end
-        for row_number, selected_device in ipairs(selected_devices) do
-            local device_name = selected_device["device_name"]
-            if (device_name) then
-                local device_instances = ensure_device_instances(device_name)
-                for i, device in ipairs(device_instances) do
-                    local targets = collect_target_indices(device, device_name, selected_device)
-
-                    for _, idx in ipairs(targets) do
-                        local parameter = device:parameter(idx)
-                        local target = (extreme == "min") and parameter.value_min or parameter.value_max
-                        -- Skip redundant writes: avoids firing value notifiers and
-                        -- re-scanning for parameters already at the extreme.
-                        local ok = pcall(function()
-                            if (math.abs(parameter.value - target) > 1e-6) then
-                                parameter.value = target
-                            end
-                        end)
-                        if (ok) then
-                            n = n + 1
-                        end
-                        processed = processed + 1
-                        if (vb.views.status) then
-                            if (total > 0) then
-                                vb.views.status.text = string.format(
-                                    'Setting parameter values to %s... (%d/%d)', verb, processed, total)
-                            else
-                                vb.views.status.text = 'Setting parameter values to ' .. verb .. '...'
-                            end
-                        end
-                    end
-
-                    coroutine.yield()
+        for _, w in ipairs(work) do
+            local ok, err = pcall(display_extreme, w[1], w[2], w[3])
+            if (not ok) then
+                print("OVERSAMPLE extreme_values UI error row " .. tostring(w[1]) .. ": " .. tostring(err))
+            end
+            processed = processed + 1
+            if (vb.views.status) then
+                if (total > 0) then
+                    vb.views.status.text = string.format(
+                        'Setting controls to %s... (%d/%d)', verb, processed, total)
+                else
+                    vb.views.status.text = 'Setting controls to ' .. verb .. '...'
                 end
             end
+            coroutine.yield()
         end
     end
 
-    -- Re-sync the grid once the writes are done: the live device parameters changed
-    -- but the row controls are not auto-notified, so update every displayed row
-    -- (dropdowns + sliders, including any dependent secondary parameter like Pro-Q's
-    -- Processing Resolution), then re-enable the buttons.
     local function done()
-        if (dialog and dialog.visible) then
-            for row_number, selected_device in ipairs(selected_devices) do
-                local device_name = selected_device["device_name"]
-                local parameter_index = selected_device["parameter_index"]
-                if (device_name and parameter_index) then
-                    local device_instances = ensure_device_instances(device_name)
-                    if (#device_instances > 0) then
-                        local ok, err = pcall(function()
-                            set_value_control(row_number, device_name, device_instances, parameter_index)
-                        end)
-                        if (not ok) then
-                            print("OVERSAMPLE set_value_control error row " .. row_number .. ": " .. tostring(err))
-                        end
-                    end
-                end
-            end
-            if (vb.views.status) then
-                vb.views.status.text = n .. ' parameter values set to ' .. verb .. '.'
-            end
+        if (vb.views.status) then
+            vb.views.status.text = 'Controls set to ' .. verb .. '.'
         end
         set_main_buttons_active(true)
     end
