@@ -32,7 +32,7 @@ needs and may not work for you.**
   keep backups.
 
   [renoise]: https://www.renoise.com/
-  [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/actions/workflows/lua.yml/badge.svg
+  [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/actions/workflows/build.yml/badge.svg
   [license-badge]: https://img.shields.io/github/license/asbjornu/org.bitbear.Oversample.xrnx
   [renoise-api-badge]: https://img.shields.io/badge/Renoise%20API-6-blue
   [lua-badge]: https://img.shields.io/badge/Lua-5.1-blue
