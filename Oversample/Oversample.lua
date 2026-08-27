@@ -126,7 +126,7 @@ end
 -- Merge a serialized name list, de-duplicating while preserving order.
 local function merge_name_list(list)
   for i = 1, list_count(list) do
-    local name = list[i]
+    local name = tostring(list[i])
     local seen = false
     for _, v in ipairs(cached_device_names) do
       if (v == name) then seen = true; break end
@@ -704,6 +704,46 @@ function add_device_items(device_popup_id, selected_device_index)
     vb.views.status.text = 'Done.'
 end
 
+-- Set the value slider's range/current value from a resolved parameter index.
+local function set_slider(row_number, device_instances, parameter_index)
+    local device = device_instances[1]
+    local parameter = device:parameter(parameter_index)
+    local settings_row_identifiers = create_settings_row_identifiers(row_number)
+    local slider = vb.views[settings_row_identifiers["parameter_value_slider_id"]]
+
+    slider.min = parameter.value_min
+    slider.max = parameter.value_max
+    slider.value = parameter.value
+    slider.active = true
+end
+
+-- Update the value slider for a chosen parameter without scanning the whole
+-- plugin: find the parameter by name in a single tight pass (no coroutine
+-- yields) and read its current value directly. This lets the "Oversample"
+-- parameter's slider react instantly, before the full list is enumerated.
+local function apply_parameter_value(row_number, device_name, parameter_name)
+    local device_instances = ensure_device_instances(device_name)
+    local device = device_instances[1]
+    if (not device) then
+        return
+    end
+
+    local parameter_index = nil
+    for p = 1, table.getn(device.parameters) do
+        if (device:parameter(p).name == parameter_name) then
+            parameter_index = p
+            break
+        end
+    end
+    if (not parameter_index) then
+        return
+    end
+
+    selected_devices[row_number]["parameter_name"] = parameter_name
+    selected_devices[row_number]["parameter_index"] = parameter_index
+    set_slider(row_number, device_instances, parameter_index)
+end
+
 function device_selected(device_index, device_name, parameter_popup_id, row_number)
     vb.views["set_values_button"].active = false
     selected_devices[row_number] = {
@@ -742,6 +782,10 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
     if (cached_parameters[device_name]) then
         -- Already cached (this session, song, or a previous run): no scan.
         apply_parameters(cached_parameters[device_name])
+        if (known_parameters) then
+            local known_name = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
+            apply_parameter_value(row_number, device_name, known_name)
+        end
         return
     end
 
@@ -749,9 +793,13 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
     -- can act at once, then run the one-time scan to back-fill the rest.
     if (known_parameters) then
         local items = (type(known_parameters) == "string") and { known_parameters } or { table.unpack(known_parameters) }
+        local known_name = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
         parameters_popup.items = items
         parameters_popup.value = 1
         parameters_popup.active = true
+        -- Reflect the known parameter's current value on the slider right away,
+        -- without waiting for the full parameter scan to complete.
+        apply_parameter_value(row_number, device_name, known_name)
         vb.views.status.text = 'Ready.'
         vb.views["set_values_button"].active = true
     else
@@ -766,6 +814,7 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
     slicer:start()
 end
 
+-- Set the value slider's range/current value from a resolved parameter index.
 function parameter_selected(parameter_index, parameter_name, device_name, row_number)
     print('parameter_selected:' .. device_name)
     local device_instances = ensure_device_instances(device_name)
@@ -774,17 +823,12 @@ function parameter_selected(parameter_index, parameter_name, device_name, row_nu
 
     for k, v in ipairs(device_instances) do
         vb.views["set_values_button"].active = false
-        local device = device_instances[k]
+        set_slider(row_number, device_instances, parameter_index)
+    end
+
+    local device = device_instances[1]
+    if (device) then
         local parameter = device:parameter(parameter_index)
-        local settings_row_identifiers = create_settings_row_identifiers(row_number)
-        local parameter_value_slider_id = settings_row_identifiers["parameter_value_slider_id"]
-        local parameter_value_slider = vb.views[parameter_value_slider_id]
-
-        parameter_value_slider.min = parameter.value_min
-        parameter_value_slider.max = parameter.value_max
-        parameter_value_slider.value = parameter.value
-        parameter_value_slider.active = true
-
         print(("        %s[%d]: %d, min(%d), $max(%d), quantum(%d), default(%d), string(%s)."):format(
             parameter.name,
             parameter_index,
