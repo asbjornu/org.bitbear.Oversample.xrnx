@@ -32,7 +32,7 @@ local known_devices_parameters = {
       ['VST3: FabFilter: Saturn 2'] = 'High Quality Mode',
       ['VST3: FabFilter: Pro-MB'] = 'Oversampling',
       ['VST3: FabFilter: Pro-C 2'] = 'Oversampling',
-      ['VST3: FabFilter: Pro-L 2'] = 'Oversampling',
+
       ['VST3: FabFilter: Pro-Q 2'] = {
          'Processing Mode', 'Processing Resolution'
       },
@@ -607,7 +607,7 @@ function create_settings_row_identifiers(row_number)
     }
 end
 
-local function render_settings_rows(device_names)
+function render_settings_rows(device_names)
     local container = vb.views.settings_container
     settings_row_count = 0
     device_popups = {}
@@ -717,6 +717,32 @@ local function set_slider(row_number, device_instances, parameter_index)
     slider.active = true
 end
 
+-- Resolve a known parameter name to its index within a list of parameter
+-- names. Plugins do not always expose the exact name we expect, so we match
+-- exactly first, then case-insensitively (ignoring surrounding whitespace),
+-- then by substring (the known name appearing inside the real name). The last
+-- fallback catches e.g. "Oversampling" vs "Oversampling Rate".
+local function match_parameter(names, target)
+    local tl = tostring(target):lower():match("^%s*(.-)%s*$")
+
+    for i, n in ipairs(names) do
+        if (n == target) then
+            return i
+        end
+    end
+    for i, n in ipairs(names) do
+        if (tostring(n):lower():match("^%s*(.-)%s*$") == tl) then
+            return i
+        end
+    end
+    for i, n in ipairs(names) do
+        if (tostring(n):lower():find(tl, 1, true)) then
+            return i
+        end
+    end
+    return nil
+end
+
 -- Update the value slider for a chosen parameter without scanning the whole
 -- plugin: find the parameter by name in a single tight pass (no coroutine
 -- yields) and read its current value directly. This lets the "Oversample"
@@ -728,18 +754,18 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
         return
     end
 
-    local parameter_index = nil
-    for p = 1, table.getn(device.parameters) do
-        if (device:parameter(p).name == parameter_name) then
-            parameter_index = p
-            break
-        end
+    local count = table.getn(device.parameters)
+    local names = {}
+    for p = 1, count do
+        names[p] = device:parameter(p).name
     end
+
+    local parameter_index = match_parameter(names, parameter_name)
     if (not parameter_index) then
         return
     end
 
-    selected_devices[row_number]["parameter_name"] = parameter_name
+    selected_devices[row_number]["parameter_name"] = device:parameter(parameter_index).name
     selected_devices[row_number]["parameter_index"] = parameter_index
     set_slider(row_number, device_instances, parameter_index)
 end
@@ -762,16 +788,36 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
             parameters = {}
         end
 
+        -- Only touch the UI while the Oversample dialog (and this row's popup)
+        -- still exist. The scan may finish after the dialog was closed, in which
+        -- case we keep the cached result but skip the visual update.
+        if (not dialog or not dialog.visible or not parameters_popup) then
+            return
+        end
+
+        -- If the enumeration produced no usable names (e.g. the plugin's editor
+        -- was closed and it exposed nothing), keep whatever is already shown
+        -- (the pre-filled known parameter) instead of replacing it with
+        -- placeholders.
+        local has_real = false
+        for _, n in ipairs(parameters) do
+            if (type(n) == "string" and not n:match("^%(parameter %d+%)$")) then
+                has_real = true
+                break
+            end
+        end
+        if (not has_real) then
+            return
+        end
+
         parameters_popup.items = parameters
         parameters_popup.active = true
 
         if (known_parameters) then
             local target = (type(known_parameters) == "string") and known_parameters or known_parameters[1]
-            for i, p in ipairs(parameters) do
-                if (p == target) then
-                    parameters_popup.value = i
-                    break
-                end
+            local i = match_parameter(parameters, target)
+            if (i) then
+                parameters_popup.value = i
             end
         end
 
@@ -917,9 +963,27 @@ function enumerate_devices(track)
 end
 
 function get_parameters(device_name)
-    if (cached_parameters[device_name]) then
-        print('Returning cached parameters for "' .. device_name .. '".')
-        return cached_parameters[device_name]
+    local cached = cached_parameters[device_name]
+    if (cached) then
+        -- Reject a stale cache: empty, placeholder-only, or — most importantly —
+        -- shorter than the plugin's current parameter count (a truncated list
+        -- left behind by an interrupted scan, or by an under-reported #count on
+        -- VST3 plugins). A full cache matches the live count exactly.
+        local instances = ensure_device_instances(device_name)
+        local device = instances[1]
+        if (device and #cached == count_parameters(device)
+            and #cached > 0 and type(cached[1]) == "string"
+            and not cached[1]:match("^%(parameter %d+%)$")) then
+            print('Returning cached parameters for "' .. device_name .. '".')
+            if (device_name:find("Pro%-L 2")) then
+                print("Oversample DEBUG " .. device_name .. " (cached): count=" .. #cached)
+                for i, n in ipairs(cached) do
+                    print("  [" .. i .. "] " .. tostring(n))
+                end
+            end
+            return cached
+        end
+        cached_parameters[device_name] = nil
     end
 
     local instances = ensure_device_instances(device_name)
@@ -929,41 +993,95 @@ function get_parameters(device_name)
         return {}
     end
 
+    -- Enumerate by probing device:parameter(p), instead of trusting
+    -- #device.parameters (the length operator under-reports the count for some
+    -- VST3 plugins). When device:parameter(p) raises (e.g. "invalid parameter
+    -- index") we have reached the end of the plugin's exposed parameter list:
+    -- stop. We must NOT fabricate placeholder entries for the thrown indices,
+    -- because selecting one would crash and a gap would truncate ipairs().
     local parameters = {}
-
-    for p = 1, table.getn(device.parameters) do
-        if (dialog and not dialog.visible) then
-            print('Dialog closed, stopping.')
-            return parameters
+    local got_real = false
+    local completed = false
+    local p = 1
+    while (p <= 4096) do
+        local ok, parameter = pcall(function()
+            return device:parameter(p)
+        end)
+        if (not ok or not parameter) then
+            break
         end
 
-        local parameter = device:parameter(p)
+        local name = parameter.name
+        if (name and name ~= "") then
+            parameters[p] = name
+            got_real = true
+        else
+            parameters[p] = ("(parameter %d)"):format(p)
+        end
 
-        vb.views.status.text = device.name .. ': ' .. parameter.name
-
-        parameters[p] = parameter.name
-
-        coroutine.yield()
+        p = p + 1
+        -- Yield every few parameters so Renoise stays responsive during the
+        -- (one-time) scan of plugins with very large parameter counts.
+        if (p % 8 == 0) then
+            coroutine.yield()
+        end
     end
+    completed = true
 
     -- Cache the result so we never iterate this plugin's parameters again
-    -- (until the device type is removed/re-added or its preset changes).
-    -- The cache is kept both per-song (tool_data) and machine-wide
-    -- (preferences), so the installed plugin is only ever reached into once.
-    cached_parameters[device_name] = parameters
-    cache_dirty = true
-    global_cache_dirty = true
+    -- (until the device type is removed/re-added or its preset changes). The
+    -- cache is kept both per-song (tool_data) and machine-wide (preferences),
+    -- so the installed plugin is only ever reached into once. Only cache a
+    -- fully completed, non-empty enumeration; a partial or empty pass is
+    -- retried the next time it is needed.
+    if (completed and got_real) then
+        cached_parameters[device_name] = parameters
+        cache_dirty = true
+        global_cache_dirty = true
+    end
+
+    -- TEMP DEBUG: dump FabFilter Pro-L 2 parameter names so we can confirm the
+    -- exact oversampling parameter (the VST3 build exposes fewer parameters).
+    if (device_name:find("Pro%-L 2")) then
+        print("Oversample DEBUG " .. device_name .. ": count=" .. #parameters)
+        for i, n in ipairs(parameters) do
+            print("  [" .. i .. "] " .. tostring(n))
+        end
+    end
 
     return parameters
 end
 
+-- Count a plugin's exposed parameters by probing until device:parameter(p)
+-- raises (the true end of the list). Used to validate cached lists, since the
+-- length operator ('#') can under-report the count for some VST3 plugins.
+local function count_parameters(device)
+    local n = 0
+    local p = 1
+    while (p <= 4096) do
+        local ok = pcall(function()
+            return device:parameter(p)
+        end)
+        if (not ok) then
+            break
+        end
+        n = n + 1
+        p = p + 1
+    end
+    return n
+end
+
 function enumerate_parameters(device_name)
     -- print('enumerate_parameters')
-    vb.views["set_values_button"].active = false
+    if (dialog and dialog.visible and vb.views["set_values_button"]) then
+        vb.views["set_values_button"].active = false
+    end
 
     local parameters = get_parameters(device_name)
 
-    vb.views["set_values_button"].active = true
+    if (dialog and dialog.visible and vb.views["set_values_button"]) then
+        vb.views["set_values_button"].active = true
+    end
 
     return parameters
 end
