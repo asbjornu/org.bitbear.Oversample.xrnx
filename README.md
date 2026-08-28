@@ -57,4 +57,4 @@ only the testable core module, not the whole tool (the luacov report is scoped t
   [license-badge]: https://img.shields.io/github/license/asbjornu/org.bitbear.Oversample.xrnx
   [renoise-api-badge]: https://img.shields.io/badge/Renoise%20API-6-blue
   [lua-badge]: https://img.shields.io/badge/Lua-5.1-blue
-  [coverage-badge]: https://codecov.io/gh/asbjornu/org.bitbear.Oversample.xrnx/branch/renoise%2F3.5.4/graph/badge.svg
+  [coverage-badge]: https://codecov.io/gh/asbjornu/org.bitbear.Oversample.xrnx/branch/main/graph/badge.svg
