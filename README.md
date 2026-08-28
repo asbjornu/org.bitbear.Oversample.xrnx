@@ -4,7 +4,7 @@
 ![License][license-badge]
 ![Renoise API][renoise-api-badge]
 ![Lua][lua-badge]
-![Coverage (core)][coverage-badge]
+![codecov][coverage-badge]
 
 
 Oversample is a [Renoise][renoise] plugin that will increase all quality
@@ -39,19 +39,22 @@ The pure, Renoise-independent logic lives in `Oversample/oversample_core.lua` an
 is unit-tested with [luaunit][luaunit] in `test/oversample_core_test.lua`, which
 runs in CI via the Test workflow under [luacov][luacov]. Every public function of
 that core module is exercised by the suite, and its line coverage is measured by
-luacov in CI and shown in the badge above (the few untested lines are defensive
-branches for an unused data shape).
+luacov and reported to [Codecov][codecov]; the badge above shows the live
+coverage (the few untested lines are defensive branches for an unused data
+shape).
 
 `Oversample/Oversample.lua` and `main.lua` are coupled to the Renoise runtime (the
 `renoise` global and `ViewBuilder`) and cannot run outside of Renoise, so they are
-intentionally excluded from unit testing. The "Coverage (core)" badge therefore
-reflects only the testable core module, not the whole tool.
+intentionally excluded from unit testing. The Codecov badge therefore reflects
+only the testable core module, not the whole tool (the luacov report is scoped to
+`Oversample` via `.luacov`).
 
   [renoise]: https://www.renoise.com/
   [luaunit]: https://github.com/bluebird75/luaUnit
   [luacov]: https://keplerproject.github.io/luacov/
+  [codecov]: https://codecov.io/gh/asbjornu/org.bitbear.Oversample.xrnx
   [build-badge]: https://github.com/asbjornu/org.bitbear.Oversample.xrnx/actions/workflows/build.yml/badge.svg
   [license-badge]: https://img.shields.io/github/license/asbjornu/org.bitbear.Oversample.xrnx
   [renoise-api-badge]: https://img.shields.io/badge/Renoise%20API-6-blue
   [lua-badge]: https://img.shields.io/badge/Lua-5.1-blue
-  [coverage-badge]: https://img.shields.io/badge/coverage%20(core)-97.66%25-brightgreen
+  [coverage-badge]: https://codecov.io/gh/asbjornu/org.bitbear.Oversample.xrnx/branch/renoise%2F3.5.4/graph/badge.svg

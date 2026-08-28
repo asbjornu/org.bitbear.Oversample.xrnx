@@ -5,34 +5,23 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
     - uses: actions/checkout@v4
-    - name: Install Lua 5.1 and luacov
+    - name: Install Lua 5.1, luacov and the LCOV reporter
       run: |
         sudo apt-get update
         sudo apt-get install -y lua5.1 liblua5.1-dev luarocks
         luarocks install --lua-version=5.1 luacov
+        luarocks install --lua-version=5.1 luacov-reporter-lcov
+        luarocks install --lua-version=5.1 luaunit
     - name: Run unit tests with coverage
       run: |
         eval $(luarocks --lua-version=5.1 path)
         lua5.1 -lluacov test/oversample_core_test.lua
-        luacov
-        echo "=== Core module coverage ==="
-        grep "oversample_core.lua" luacov.report.out || true
-    - name: Update coverage badge
-      # Only on pushes (not PRs) so we can commit the refreshed number, and use
-      # [skip ci] so the resulting push does not re-trigger this workflow.
-      if: github.event_name == 'push'
-      run: |
-        COV=$(awk '/oversample_core\.lua/ {print $NF}' luacov.report.out | sed 's/%//')
-        echo "Core coverage: ${COV}%"
-        sed -E "s|(coverage%20\(core\))-[0-9.]+%25|\1-${COV}%25|" README.md > README.md.tmp && mv README.md.tmp README.md
-        if ! git diff --quiet README.md; then
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "ci: update coverage badge [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-        fi
+        luacov -r lcov
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        files: luacov.report.out
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: true
