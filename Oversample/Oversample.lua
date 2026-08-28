@@ -701,40 +701,34 @@ function render_settings_rows(device_names)
     table.sort(sorted_names)
     device_names = sorted_names
 
-    local found = false
-    for _, device_name in ipairs(device_names) do
-        if (known_devices_parameters[device_name]) then
-            found = true
-            local settings_row = create_settings_row()
-            container:add_child(settings_row)
-            local settings_row_identifiers = create_settings_row_identifiers()
-            local device_popup_id = settings_row_identifiers["device_popup_id"]
-
-            local idx = 1
-            for i, n in ipairs(device_names) do
-                if (n == device_name) then
-                    idx = i
-                    break
-                end
-            end
-
-            if (vb.views[device_popup_id]) then
-                local devices_popup = vb.views[device_popup_id]
-                devices_popup.items = device_names
-                devices_popup.value = idx
-                devices_popup.active = true
-            end
+    -- Only known devices have a meaningful oversampling parameter to drive, so
+    -- only they get a row automatically. Each row's device dropdown still lists
+    -- every device in the song, so any row can be reassigned by hand.
+    local known_names = {}
+    for _, n in ipairs(device_names) do
+        if (known_devices_parameters[n]) then
+            known_names[#known_names + 1] = n
         end
     end
 
-    if (not found) then
+    for _, device_name in ipairs(known_names) do
         local settings_row = create_settings_row()
         container:add_child(settings_row)
         local settings_row_identifiers = create_settings_row_identifiers()
         local device_popup_id = settings_row_identifiers["device_popup_id"]
+
+        local idx = 1
+        for i, n in ipairs(device_names) do
+            if (n == device_name) then
+                idx = i
+                break
+            end
+        end
+
         if (vb.views[device_popup_id]) then
             local devices_popup = vb.views[device_popup_id]
             devices_popup.items = device_names
+            devices_popup.value = idx
             devices_popup.active = true
         end
     end
@@ -836,6 +830,58 @@ function refresh_device_popups()
             end
             popup.value = new_index
             popup.active = (#names > 0)
+        end
+    end
+end
+
+-- Set of device names currently chosen in the rendered settings rows.
+local function rendered_device_name_set()
+    local set = {}
+    for i = 1, settings_row_count do
+        local ids = create_settings_row_identifiers(i)
+        local popup = vb.views[ids["device_popup_id"]]
+        if (popup and popup.items and popup.value and popup.items[popup.value]) then
+            set[popup.items[popup.value]] = true
+        end
+    end
+    return set
+end
+
+-- Append a new settings row already pointing at the given device and populate its
+-- parameter controls, exactly as if the user had added a row and picked it.
+local function add_row_for_device(device_name)
+    local settings_row = create_settings_row()
+    vb.views.settings_container:add_child(settings_row)
+    local ids = create_settings_row_identifiers()
+    local device_popup_id = ids["device_popup_id"]
+    local parameter_popup_id = ids["parameter_popup_id"]
+
+    add_device_items(device_popup_id)
+
+    local popup = vb.views[device_popup_id]
+    if (popup) then
+        for i, n in ipairs(popup.items) do
+            if (n == device_name) then
+                popup.value = i
+                device_selected(i, device_name, parameter_popup_id, settings_row_count)
+                break
+            end
+        end
+    end
+end
+
+-- When a known device appears in the song, add a row for it automatically so the
+-- user does not have to do it by hand. Devices already represented by a row are
+-- skipped to avoid duplicates.
+function add_rows_for_new_known_devices()
+    if (not dialog or not dialog.visible) then
+        return
+    end
+
+    local rendered = rendered_device_name_set()
+    for _, name in ipairs(cached_device_names) do
+        if (known_devices_parameters[name] and not rendered[name]) then
+            add_row_for_device(name)
         end
     end
 end
