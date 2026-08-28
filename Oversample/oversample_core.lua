@@ -27,26 +27,21 @@ core.known_devices_parameters = {
    ['VST: FabFilter: Pro-Q 2'] = {
       'Processing Mode', 'Processing Resolution'
    },
-    ['VST: FabFilter: Pro-Q 3'] = {
-       'Processing Mode', 'Processing Resolution'
-    },
-    ['VST3: FabFilter: Saturn'] = 'High Quality',
-    ['VST3: FabFilter: Saturn 2'] = 'High Quality Mode',
-    ['VST3: FabFilter: Pro-MB'] = 'Oversampling',
-    ['VST3: FabFilter: Pro-C 2'] = 'Oversampling',
-
-    ['VST3: FabFilter: Pro-Q 2'] = {
-       'Processing Mode', 'Processing Resolution'
-    },
-    ['VST3: FabFilter: Pro-Q 3'] = {
-       'Processing Mode', 'Processing Resolution'
-    },
+   ['VST: FabFilter: Pro-Q 3'] = {
+      'Processing Mode', 'Processing Resolution'
+   },
 }
 
 
 --------------------------------------------------------------------------------
 -- The recognised primary parameter name for a device (the one we snap to and
 -- drive). Works for string, list, and table style known_devices_parameters.
+
+--------------------------------------------------------------------------------
+-- The recognised primary parameter name for a device (the one we snap to and
+-- drive). Works for string, list, and table style known_devices_parameters.
+-- Matching is exact: only the device names hard-coded in known_devices_parameters
+-- are recognised.
 
 function core.known_primary(device_name)
    local kp = core.known_devices_parameters[device_name]
