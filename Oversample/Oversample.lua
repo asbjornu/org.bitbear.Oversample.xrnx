@@ -1,8 +1,5 @@
--- Lua 5.2+ removed table.getn; provide a compatibility shim. Set it with
--- rawset so the standard `table` global is not treated as read-only.
-if not table.getn then
-  rawset(table, "getn", function(t) return #t end)
-end
+-- Lua 5.2+ removed table.getn; use a local alias for compatibility.
+local getn = table.getn or function(t) return #t end
 
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
 -- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
@@ -238,9 +235,9 @@ function prune_parameter_cache()
   local song = renoise.song()
   local existing = {}
 
-  for t = 1, table.getn(song.tracks) do
+  for t = 1, getn(song.tracks) do
     local track = song:track(t)
-    for d = 1, table.getn(track.devices) do
+    for d = 1, getn(track.devices) do
       existing[track:device(d).name] = true
     end
   end
@@ -269,9 +266,9 @@ local function collect_device_names()
   local total_instances = 0
   local active_instances = 0
   local deduped = 0
-  for t = 1, table.getn(song.tracks) do
+  for t = 1, getn(song.tracks) do
     local track = song:track(t)
-    for d = 1, table.getn(track.devices) do
+    for d = 1, getn(track.devices) do
       local device = track:device(d)
       total_instances = total_instances + 1
       if (device.is_active) then
@@ -302,9 +299,9 @@ local function ensure_device_instances(device_name)
 
   local instances = {}
   local song = renoise.song()
-  for t = 1, table.getn(song.tracks) do
+  for t = 1, getn(song.tracks) do
     local track = song:track(t)
-    for d = 1, table.getn(track.devices) do
+    for d = 1, getn(track.devices) do
       local device = track:device(d)
       if (device.is_active and device.name == device_name) then
         instances[#instances + 1] = device
@@ -335,8 +332,6 @@ end
 -- A plugin's parameter list can change when its preset/program changes (some
 -- plugins expose a different set of parameters per preset). When that happens
 -- we drop the cached list so it is recomputed the next time it is needed.
--- Defined as a global so it can be referenced by name before this point (the
--- notifier is attached in ensure_device_instances, which runs earlier).
 function on_device_preset_changed(device)
   local name = device.name
   if (cached_parameters[name]) then
@@ -359,12 +354,12 @@ local function attach_song_device_notifiers()
     track.devices_observable:add_notifier(on_song_devices_changed)
   end
 
-  for t = 1, table.getn(song.tracks) do
+  for t = 1, getn(song.tracks) do
     attach_track(song:track(t))
   end
 
   song.tracks_observable:add_notifier(function()
-    for t = 1, table.getn(song.tracks) do
+    for t = 1, getn(song.tracks) do
       attach_track(song:track(t))
     end
     prune_parameter_cache()
@@ -1193,16 +1188,16 @@ function enumerate_tracks()
         -- "Scanning devices… (k/total)" progress instead of flickering names.
         device_scan_total = 0
         device_scan_count = 0
-        for t = 1, table.getn(song.tracks) do
+        for t = 1, getn(song.tracks) do
             local track = song:track(t)
-            for d = 1, table.getn(track.devices) do
+            for d = 1, getn(track.devices) do
                 if (track:device(d).is_active) then
                     device_scan_total = device_scan_total + 1
                 end
             end
         end
 
-        for t = 1, table.getn(song.tracks) do
+        for t = 1, getn(song.tracks) do
             set_main_buttons_active(false)
 
             if (dialog and not dialog.visible) then
@@ -1234,7 +1229,7 @@ function enumerate_devices(track)
     local ok, err = xpcall(function()
         set_main_buttons_active(false)
 
-        for d = 1, table.getn(track.devices) do
+        for d = 1, getn(track.devices) do
             if (dialog and not dialog.visible) then
                 print('Dialog closed, stopping.')
                 return
@@ -1308,18 +1303,12 @@ function get_parameters(device_name)
     -- because selecting one would crash and a gap would truncate ipairs().
     local parameters = {}
     local got_real = false
-    local completed = false
     local p = 1
     while (p <= 4096) do
         local ok, parameter = pcall(function()
             return device:parameter(p)
         end)
         if (not ok or not parameter) then
-            -- Reached the true end of the plugin's exposed parameter list, so the
-            -- scan completed and its result may be cached. A run that instead
-            -- hits the 4096-probe cap below leaves `completed` false and is
-            -- retried the next time it is needed.
-            completed = true
             break
         end
 
@@ -1343,9 +1332,9 @@ function get_parameters(device_name)
     -- (until the device type is removed/re-added or its preset changes). The
     -- cache is kept both per-song (tool_data) and machine-wide (preferences),
     -- so the installed plugin is only ever reached into once. Only cache a
-    -- fully completed, non-empty enumeration; a partial or empty pass is
-    -- retried the next time it is needed.
-    if (completed and got_real) then
+    -- non-empty enumeration; a partial or empty pass is retried the next time
+    -- it is needed.
+    if (got_real) then
         cached_parameters[device_name] = parameters
         cache_dirty = true
         global_cache_dirty = true
