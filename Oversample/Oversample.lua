@@ -1376,7 +1376,6 @@ function get_parameters(device_name)
     -- because selecting one would crash and a gap would truncate ipairs().
     local parameters = {}
     local got_real = false
-    local completed = false
     local p = 1
     while (p <= 4096) do
         local ok, parameter = pcall(function()
@@ -1401,15 +1400,14 @@ function get_parameters(device_name)
             coroutine.yield()
         end
     end
-    completed = true
 
     -- Cache the result so we never iterate this plugin's parameters again
     -- (until the device type is removed/re-added or its preset changes). The
     -- cache is kept both per-song (tool_data) and machine-wide (preferences),
     -- so the installed plugin is only ever reached into once. Only cache a
-    -- fully completed, non-empty enumeration; a partial or empty pass is
-    -- retried the next time it is needed.
-    if (completed and got_real) then
+    -- non-empty enumeration; a partial or empty pass is retried the next time
+    -- it is needed.
+    if (got_real) then
         cached_parameters[device_name] = parameters
         cache_dirty = true
         global_cache_dirty = true
