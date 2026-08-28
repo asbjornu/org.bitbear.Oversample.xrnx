@@ -1,0 +1,6 @@
+return {
+  -- Only report coverage for the Renoise-independent core module; the luaunit
+  -- framework (installed via luarocks) and the test file itself are not part of
+  -- the tool's code.
+  include = { "Oversample" },
+}
