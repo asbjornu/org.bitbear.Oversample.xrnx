@@ -772,14 +772,12 @@ function add_device_items(device_popup_id, selected_device_index)
     local device_items = {}
     set_main_buttons_active(false)
 
-    if (next(devices) ~= nil) then
-        for k, _ in pairs(devices) do
-            device_items[#device_items + 1] = k
-        end
-    else
-        for _, n in ipairs(cached_device_names) do
-            device_items[#device_items + 1] = n
-        end
+    -- Offer the full, current device list so any row can target any device in
+    -- the song. `cached_device_names` is kept in sync with the live song by the
+    -- device-change handlers, whereas the `devices` map can be stale after a
+    -- device is added or removed.
+    for _, n in ipairs(cached_device_names) do
+        device_items[#device_items + 1] = n
     end
 
     table.sort(device_items)
