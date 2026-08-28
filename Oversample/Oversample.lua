@@ -1,6 +1,7 @@
--- Lua 5.2+ removed table.getn; provide a compatibility shim.
+-- Lua 5.2+ removed table.getn; provide a compatibility shim. Set it with
+-- rawset so the standard `table` global is not treated as read-only.
 if not table.getn then
-  table.getn = function(t) return #t end
+  rawset(table, "getn", function(t) return #t end)
 end
 
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
@@ -31,7 +32,6 @@ local settings_row_count = 0
 local function create_settings_row_identifiers(row_number)
    return core.create_settings_row_identifiers(row_number or settings_row_count)
 end
-local device_popups = {}
 local selected_devices = {}
 
 -- Tracks in-flight per-device parameter scans so the status text only reports
@@ -335,7 +335,9 @@ end
 -- A plugin's parameter list can change when its preset/program changes (some
 -- plugins expose a different set of parameters per preset). When that happens
 -- we drop the cached list so it is recomputed the next time it is needed.
-local function on_device_preset_changed(device)
+-- Defined as a global so it can be referenced by name before this point (the
+-- notifier is attached in ensure_device_instances, which runs earlier).
+function on_device_preset_changed(device)
   local name = device.name
   if (cached_parameters[name]) then
     print('Oversample: preset changed for "' .. name .. '", invalidating cache.')
@@ -378,7 +380,6 @@ end
 function oversample_on_new_song()
   devices = {}
   selected_devices = {}
-  device_popups = {}
   settings_row_count = 0
   devices_valid = false
 
@@ -537,7 +538,6 @@ function oversample()
     vb.views.status.text = 'Finding devices...'
 
     devices = {}
-    device_popups = {}
     selected_devices = {}
     settings_row_count = 0
 
@@ -593,8 +593,6 @@ function create_settings_row()
     local parameter_value_secondary_popup_id = settings_row_identifiers["parameter_value_secondary_popup_id"]
     local settings_row_id = settings_row_identifiers["settings_row_id"]
     local add_button_id = settings_row_identifiers["add_button_id"]
-
-    device_popups[row_number] = device_popup_id
 
     return vb:row {
         id = settings_row_id,
@@ -703,7 +701,6 @@ end
 function render_settings_rows(device_names)
     local container = vb.views.settings_container
     settings_row_count = 0
-    device_popups = {}
 
     local sorted_names = {}
     for _, n in ipairs(device_names) do
@@ -1318,6 +1315,11 @@ function get_parameters(device_name)
             return device:parameter(p)
         end)
         if (not ok or not parameter) then
+            -- Reached the true end of the plugin's exposed parameter list, so the
+            -- scan completed and its result may be cached. A run that instead
+            -- hits the 4096-probe cap below leaves `completed` false and is
+            -- retried the next time it is needed.
+            completed = true
             break
         end
 
@@ -1336,7 +1338,6 @@ function get_parameters(device_name)
             coroutine.yield()
         end
     end
-    completed = true
 
     -- Cache the result so we never iterate this plugin's parameters again
     -- (until the device type is removed/re-added or its preset changes). The

@@ -30,6 +30,30 @@ globals = {
   "enumerate_parameters",
   "add_device_items",
   "add_device_items_init",
+  -- Internal helpers and Renoise callbacks defined as module-level globals on
+  -- purpose: they are referenced before their definition (forward references),
+  -- and oversample_init/oversample are invoked from main.lua. A local would
+  -- resolve to nil at those earlier call sites, so they stay global.
+  "oversample_init",
+  "oversample_on_new_song",
+  "load_tool_cache",
+  "save_tool_cache",
+  "save_global_cache",
+  "save_global_device_name_cache",
+  "prune_parameter_cache",
+  "on_device_preset_changed",
+  "render_settings_rows",
+  "update_secondary",
+  "get_parameters",
+  "count_parameters",
+  "extreme_values",
+  "set_main_buttons_active",
+}
+
+-- The test/ directory is the unit-test suite (vendored luaunit plus the test
+-- file). These are excluded from linting so CI stays focused on the tool code.
+exclude_files = {
+  "test/**",
 }
 
 ignore = {
