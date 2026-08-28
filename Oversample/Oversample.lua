@@ -29,7 +29,6 @@ local settings_row_count = 0
 local function create_settings_row_identifiers(row_number)
    return core.create_settings_row_identifiers(row_number or settings_row_count)
 end
-local device_popups = {}
 local selected_devices = {}
 
 -- Tracks in-flight per-device parameter scans so the status text only reports
@@ -376,7 +375,6 @@ end
 function oversample_on_new_song()
   devices = {}
   selected_devices = {}
-  device_popups = {}
   settings_row_count = 0
   devices_valid = false
 
@@ -535,7 +533,6 @@ function oversample()
     vb.views.status.text = 'Finding devices...'
 
     devices = {}
-    device_popups = {}
     selected_devices = {}
     settings_row_count = 0
 
@@ -591,8 +588,6 @@ function create_settings_row()
     local parameter_value_secondary_popup_id = settings_row_identifiers["parameter_value_secondary_popup_id"]
     local settings_row_id = settings_row_identifiers["settings_row_id"]
     local add_button_id = settings_row_identifiers["add_button_id"]
-
-    device_popups[row_number] = device_popup_id
 
     return vb:row {
         id = settings_row_id,
@@ -701,7 +696,6 @@ end
 function render_settings_rows(device_names)
     local container = vb.views.settings_container
     settings_row_count = 0
-    device_popups = {}
 
     local sorted_names = {}
     for _, n in ipairs(device_names) do
