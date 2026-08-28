@@ -327,12 +327,14 @@ local on_song_devices_changed = function()
   device_names_dirty = true
   global_device_names_dirty = true
   save_global_device_name_cache()
+  refresh_device_popups()
+  add_rows_for_new_known_devices()
 end
 
 -- A plugin's parameter list can change when its preset/program changes (some
 -- plugins expose a different set of parameters per preset). When that happens
 -- we drop the cached list so it is recomputed the next time it is needed.
-local function on_device_preset_changed(device)
+function on_device_preset_changed(device)
   local name = device.name
   if (cached_parameters[name]) then
     print('Oversample: preset changed for "' .. name .. '", invalidating cache.')
@@ -362,12 +364,7 @@ local function attach_song_device_notifiers()
     for t = 1, getn(song.tracks) do
       attach_track(song:track(t))
     end
-    prune_parameter_cache()
-    devices_valid = false
-    cached_device_names = collect_device_names()
-    device_names_dirty = true
-    global_device_names_dirty = true
-    save_global_device_name_cache()
+    on_song_devices_changed()
   end)
 end
 
@@ -808,6 +805,38 @@ function add_device_items(device_popup_id, selected_device_index)
     -- A parameter scan may still be running in the background.
     if (pending_parameter_scans == 0) then
         vb.views.status.text = 'Done.'
+    end
+end
+
+-- Refresh every device dropdown in the currently rendered settings rows so that
+-- newly added (or removed) devices become (un)selectable. The currently chosen
+-- device is preserved when it still exists in the song.
+function refresh_device_popups()
+    local names = {}
+    for _, n in ipairs(cached_device_names) do
+        names[#names + 1] = n
+    end
+    table.sort(names)
+
+    for i = 1, settings_row_count do
+        local ids = create_settings_row_identifiers(i)
+        local device_popup_id = ids["device_popup_id"]
+        local popup = vb.views[device_popup_id]
+        if (popup) then
+            local selected_name = popup.items[popup.value]
+            popup.items = names
+            local new_index = 1
+            if (selected_name) then
+                for j, n in ipairs(names) do
+                    if (n == selected_name) then
+                        new_index = j
+                        break
+                    end
+                end
+            end
+            popup.value = new_index
+            popup.active = (#names > 0)
+        end
     end
 end
 
