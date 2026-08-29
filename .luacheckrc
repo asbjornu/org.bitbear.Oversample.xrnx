@@ -30,6 +30,21 @@ globals = {
   "enumerate_parameters",
   "add_device_items",
   "add_device_items_init",
+  -- Module-level helper globals used as Renoise notifier/entry-point callbacks.
+  "load_tool_cache",
+  "save_tool_cache",
+  "save_global_cache",
+  "save_global_device_name_cache",
+  "prune_parameter_cache",
+  "oversample_on_new_song",
+  "oversample_init",
+  "render_settings_rows",
+  "update_secondary",
+  "get_parameters",
+  "count_parameters",
+  "extreme_values",
+  "set_main_buttons_active",
+  "on_device_preset_changed",
 }
 
 ignore = {
@@ -40,4 +55,25 @@ ignore = {
   "431", -- shadowing definition
   "542", -- empty if branch
   "631", -- line too long
+}
+
+-- The project's own unit tests (test/oversample_core_test.lua) are linted with a
+-- dedicated, lenient config: luaunit discovers test cases via global tables
+-- named Test*, so those are whitelisted as known globals.
+
+files = {
+  ["test/oversample_core_test.lua"] = {
+    globals = {
+      "TestSettingsRowIdentifiers",
+      "TestCacheEncoding",
+      "TestMatchParameter",
+      "TestSameNameSet",
+      "TestCollectDeviceItems",
+      "TestResolveParameterIndex",
+      "TestKnownDevicesParameters",
+      "TestKnownPrimarySecondary",
+      "TestNearestChoiceIndex",
+      "TestResolveTargetIndices",
+    },
+  },
 }
