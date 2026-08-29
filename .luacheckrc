@@ -45,6 +45,8 @@ globals = {
   "extreme_values",
   "set_main_buttons_active",
   "on_device_preset_changed",
+  "refresh_device_popups",
+  "add_rows_for_new_known_devices",
 }
 
 ignore = {
