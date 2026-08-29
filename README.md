@@ -7,28 +7,66 @@
 ![codecov][coverage-badge]
 
 
-Oversample is a [Renoise][renoise] plugin that will increase all quality
-parameters (such as "oversampling", "quality", "phase", etc.) in all active
-devices in the song to maximum, so you get the best quality when rendering a
-song to WAV.
-
-When rendering is done, Oversample will allow you to turn all quality
-parameters back down to minimum ("Undersample") to not destroy your CPU while
+Oversample is a [Renoise][renoise] plugin that lets you push the quality
+parameters (such as "oversampling", "quality", "phase", etc.) of the devices in
+your song to their extremes, so you get the best quality when rendering a song
+to WAV, and then pull them back down again so you don't melt your CPU while
 producing.
+
+## How it works
+
+The tool opens a dialog with a grid of *device/parameter rows*. Each row targets
+one device in the song and one (or two) of its parameters that affect quality:
+
+* When the tool is opened it automatically adds a row for every recognised
+  device it finds in the song (see *Known limitations* below for which devices
+  are recognised out of the box), and scans that device's parameters in the
+  background so the full parameter list is available in the row's dropdowns.
+* You can add more rows manually, and for any row you can pick *any* device and
+  *any* parameter — recognised or not — so the tool is not limited to the built-in
+  device list.
+* **Minimize** and **Maximize** are *preview-only*: they snap the row sliders to
+  the minimum/maximum values so you can eyeball the effect, but don't touch your
+  song. **Set** applies the current slider state to the actual devices. This way
+  you can dial in exactly which parameters go to min/max and which stay put
+  before committing.
+
+Only the recognised oversampling parameters (plus each row's selected parameters)
+are ever driven — never every parameter of a device — so unrelated settings are
+left alone.
+
+### Caching
+
+Enumerating every parameter of every plugin is what used to make the tool slow.
+Parameter lists only change when a plugin is added, removed, or its preset
+changes, so Oversample caches them:
+
+* A **per-song cache** is stored inside the song file via
+  `renoise.song().tool_data`. It travels with the `.xrns` and overrides the
+  machine-wide cache, so reopening a song is instant.
+* A **machine-wide cache** is stored in the tool's `preferences.xml` and survives
+  across songs and sessions.
+
+Both caches are populated lazily as devices are scanned, and invalidated
+automatically when a plugin is added/removed or its preset changes. The first
+time you open a brand-new song with many plugins it still takes a moment to scan
+them, but afterwards it's instant.
+
+## Known limitations
+
+* Only FabFilter plugins are *recognised automatically* (and only their quality
+  parameters are preselected). For other plugins you can still target any
+  parameter manually via a row's dropdowns — auto-recognition is just a
+  convenience.
+* Adding more rows than necessary is harmless: when **Set**, **Minimize** or
+  **Maximize** is applied, each targeted device parameter is de-duplicated, so a
+  parameter can only be driven once even if it appears in several rows.
 
 ## Disclaimer
 
-**Oversample is a very young and immature extension made to support my own
-needs and may not work for you.**
+**Oversample started as a young and immature extension made to support my own
+needs and may still not work for you.**
 
-## Known defects and missing features:
-
-* There's no disk-based caching, so the first time Oversample is loaded, it's going
-  to take a while.
-* Oversample currently only knows about FabFilter plugins with quality parameters,
-  so only those will be added if present in the song.
-* It's possible to add a quality parameter as many times as you want. Every time a
-  parameter is added, it should be removed from all other popups, preferably.
 * I learnt Lua as well as Renoise Extension development while developing Oversample,
   so be careful and gentle. Save the song before attempting to use the plugin and
   keep backups.
