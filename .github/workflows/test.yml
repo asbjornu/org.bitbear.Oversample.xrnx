@@ -1,0 +1,28 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Lua 5.1 and luarocks
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y lua5.1 liblua5.1-dev luarocks
+    - name: Install dev dependencies from rockspec
+      run: |
+        eval $(luarocks --lua-version=5.1 path)
+        sudo luarocks install --lua-version=5.1 --deps-only ./oversample-1.0.0-1.rockspec
+    - name: Run unit tests with coverage
+      run: |
+        eval $(luarocks --lua-version=5.1 path)
+        lua5.1 -lluacov test/oversample_core_test.lua
+        luacov -r lcov
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v7
+      with:
+        files: luacov.report.out
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: true
