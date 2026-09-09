@@ -61,77 +61,19 @@ remains available even when High Quality is Off.
 - Do not merge, deploy, or leave duplicate edits in other worktrees unless
   requested.
 
-## Renoise ViewBuilder layout rules (learned the hard way)
+## Renoise ViewBuilder layout rules
 
-- **Aligned columns = fixed widths.** Give every control in a column the
-  same `width` (estimate from widest known label; factor
-  `~CONTENT_HEIGHT*0.3 + padding`, no text metrics exist). `CONTENT_HEIGHT
-  = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT`.
-- **`width = "*"` is REJECTED** for rows/spaces/popups/buttons (runtime
-  error: *"expecting a percentage string or number argument for property
-  'width'"*). Valid width values are **numbers** or **percentage strings**
-  (e.g. `"100%"`).
-- **`vb:space` accepts only number/percentage width, not `"*"`**, and a
-  percentage there is unreliable.
-- **`width = "100%"` on a row inside an auto-sized column collapses the row
-  to zero width** (percentage is relative to the auto-sized parent → 0).
-  Never use percentage width to "fill".
-- **`vb:horizontal_aligner` `mode="justify"` spreads space between ALL its
-  direct children.** With exactly two children it pushes the 2nd to the
-   right edge — this works for the bottom status bar, but it **jumbled the
-   fixed columns in settings rows**. Avoid for aligned column layouts. Give
-   the footer an explicit width matching the populated settings row; do not
-   rely on automatic filling or shrinking.
-- **To pin a control (e.g. the `+` button) to the right edge of every row
-  while keeping columns aligned:** *always reserve* each column's space.
-  Put optional secondary controls inside a **fixed-width, fixed-height
-  `vb:row`**, then hide the controls when unused. The container preserves
-  alignment without drawing empty disabled dropdowns. Only the newest
-  settings row retains the `+` button.
-- **Hide the old control before showing its replacement** (popup/slider or
-  popup/label). Showing both even briefly can expand the dialog, leaving
-  unused space after the old control disappears.
-- **`vb:text` expands for longer messages but does not automatically shrink
-  for shorter ones.** A final `"Done."` does not prove the status control
-  is small. The deployed footer uses a one-control- height
-  `vb:multiline_text`, `style="body"`, with a fixed width that leaves room
-  for all three buttons. `SETTINGS_WIDTH` includes the visible columns,
-  `+`, and spacing; the footer must not exceed it.
+Detailed, load-on-demand. See the `renoise-viewbuilder-layout` skill
+(`.agents/skills/renoise-viewbuilder-layout/SKILL.md`) for fixed-width column
+rules, `width` constraints, `justify` behavior, right-edge pinning, control
+swapping, and footer/status sizing.
 
 ## Tests and verification
 
-- Run from the `renoise/3.5.4` worktree, with LuaUnit installed via the
-  rockspec dependencies:
-
-  ```sh
-  eval "$(luarocks path)"
-  lua test/oversample_core_test.lua
-  lua test/oversample_ui_test.lua
-  luajit test/oversample_core_test.lua
-  luajit test/oversample_ui_test.lua
-  ```
-
-- CI runs both suites on Lua 5.1 and LuaJIT. Local `lua` may be newer, so
-  do not treat its success alone as Renoise compatibility. Use `[^%z]+`,
-  not a literal NUL inside a pattern character class, when splitting
-  NUL-delimited fields on Lua 5.1/LuaJIT.
-- Core tests target the current multi-state API: `diff_blobs_multi`,
-  `patch_blob`, `detect_label`, and `encode_osig`/`decode_osig` entries
-  with a `values` map. Do not resurrect removed `diff_blobs`,
-  `toggle_blob`, or old `off`/`on` entry shapes just to satisfy stale
-  tests.
-- `test/oversample_ui_test.lua` runs the actual dialog code against a small
-  ViewBuilder stub. It covers footer/status sizing, hidden secondary
-  fields, Saturn's independent axis, transient control overlap, and
-  newest-row `+` placement. Keep these tests outside the core coverage run.
-- Stub tests do **not** verify native rendering, font metrics, clipping, or
-  notifier timing. Check in Renoise after reload, including long status
-  messages, Minimize/Maximize, switching devices, and adding rows. Report
-  visual verification as pending unless actually performed.
-- After the test repair, 66 core tests and 6 UI tests passed on Lua 5.5 and
-  LuaJIT; the earlier nine stale core-test errors are no longer an accepted
-  baseline. Run test lint, Lua syntax checks, and `git diff --check` before
-  reporting completion.
+Detailed, load-on-demand. See the `oversample-tests` skill
+(`.agents/skills/oversample-tests/SKILL.md`) for the exact run commands,
+Lua 5.1/LuaJIT caveats, test targets, the passing baseline, and the Renoise
+visual-check steps. The Lua syntax check there is also a commit gate.
 
 ## User's UI preferences (enforced)
 
