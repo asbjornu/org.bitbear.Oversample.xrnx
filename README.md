@@ -75,17 +75,25 @@ needs and may still not work for you.**
 
 The pure, Renoise-independent logic lives in `Oversample/oversample_core.lua` and
 is unit-tested with [luaunit][luaunit] in `test/oversample_core_test.lua`, which
-runs in CI via the Test workflow under [luacov][luacov]. Every public function of
-that core module is exercised by the suite, and its line coverage is measured by
-luacov and reported to [Codecov][codecov]; the badge above shows the live
-coverage (the few untested lines are defensive branches for an unused data
-shape).
+runs in CI via the Test workflow under [luacov][luacov]. Core coverage is reported
+to [Codecov][codecov].
 
-`Oversample/Oversample.lua` and `main.lua` are coupled to the Renoise runtime (the
-`renoise` global and `ViewBuilder`) and cannot run outside of Renoise, so they are
-intentionally excluded from unit testing. The Codecov badge therefore reflects
-only the testable core module, not the whole tool (the luacov report is scoped to
-`Oversample` via `.luacov`).
+`test/oversample_ui_test.lua` uses a small ViewBuilder stub to check footer sizing,
+fixed status dimensions, secondary visibility, control switching, and add-button
+placement. It exercises the actual dialog code but does not emulate native text
+metrics, clipping, rendering, or notifier timing. After UI changes, reload the
+tool in Renoise and visually check the dialog as well.
+
+Run both suites from the tool root after installing the rockspec dependencies:
+
+```sh
+eval "$(luarocks path)"
+lua test/oversample_core_test.lua
+lua test/oversample_ui_test.lua
+```
+
+CI runs both suites with Lua 5.1 and LuaJIT. UI stub tests are excluded from the
+coverage report, so the badge continues to reflect only the core module.
 
   [renoise]: https://www.renoise.com/
   [luaunit]: https://github.com/bluebird75/luaUnit

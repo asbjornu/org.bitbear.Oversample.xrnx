@@ -228,9 +228,12 @@ function TestKnownDevicesParameters:test_every_entry_is_string_or_array_of_strin
    end
 end
 
-function TestKnownDevicesParameters:test_vst3_pro_l_2_has_no_oversampling_entry()
-   -- The VST3 Pro-L 2 build exposes no such parameter, so it must not be listed.
-   lu.assertIsNil(core.known_devices_parameters["VST3: FabFilter: Pro-L 2"])
+function TestKnownDevicesParameters:test_vst3_entries_exist_for_chunk_route()
+    -- VST3 builds expose no oversampling host parameter, but we still list them so
+    -- the dialog auto-creates a row; the value is driven via the state-chunk route.
+    -- Entries are keyed by the prefix-free plugin identity, so VST/VST3/AU share one.
+    lu.assertIsString(core.known_devices_parameters["FabFilter: Pro-L 2"])
+    lu.assertEquals(core.known_devices_parameters["FabFilter: Pro-L 2"], "Oversampling")
 end
 
 
@@ -360,6 +363,364 @@ function TestResolveTargetIndices:test_unmatched_name_ignored()
    local targets = core.resolve_target_indices(names, "Unknown Device",
       { parameter_name = "Does Not Exist" })
    lu.assertEquals(targets, {})
+end
+
+
+--------------------------------------------------------------------------------
+-- normalize_device_name (format-prefix stripping)
+
+TestNormalizeDeviceName = {}
+
+function TestNormalizeDeviceName:test_strips_vst3_prefix()
+   lu.assertEquals(core.normalize_device_name("VST3: FabFilter: Pro-Q 3"), "FabFilter: Pro-Q 3")
+end
+
+function TestNormalizeDeviceName:test_strips_vst_prefix()
+   lu.assertEquals(core.normalize_device_name("VST: FabFilter: Pro-Q 3"), "FabFilter: Pro-Q 3")
+end
+
+function TestNormalizeDeviceName:test_strips_au_prefix()
+   lu.assertEquals(core.normalize_device_name("AU: FabFilter: Pro-Q 3"), "FabFilter: Pro-Q 3")
+end
+
+function TestNormalizeDeviceName:test_leaves_prefix_free_name_unchanged()
+   lu.assertEquals(core.normalize_device_name("FabFilter: Pro-Q 3"), "FabFilter: Pro-Q 3")
+end
+
+function TestNormalizeDeviceName:test_known_primary_matches_any_format()
+   -- A single prefix-free entry must resolve regardless of the host format prefix.
+   lu.assertEquals(core.known_primary("VST3: FabFilter: Pro-C 2"), "Oversampling")
+   lu.assertEquals(core.known_primary("AU: FabFilter: Pro-C 2"), "Oversampling")
+   lu.assertEquals(core.known_primary("FabFilter: Pro-C 2"), "Oversampling")
+end
+
+--------------------------------------------------------------------------------
+-- VST3 state-chunk patching (multi-state diff / patch / detect / osig encoding)
+--
+-- These operate on raw binary blobs (strings that may contain null bytes), so the
+-- tests build blobs with string.char and assert byte-level results.
+
+TestChunkPatch = {}
+
+function TestChunkPatch:test_diff_finds_only_differing_bytes()
+   local a = string.char(0, 1, 2, 3, 4)
+   local b = string.char(0, 1, 9, 3, 9)
+   local c = string.char(0, 1, 9, 8, 4)
+   local entries = core.diff_blobs_multi({ a, b, c }, { "Off", "2x", "4x" })
+   lu.assertEquals(entries, {
+      { pos = 3, values = { Off = 2, ["2x"] = 9, ["4x"] = 9 } },
+      { pos = 4, values = { Off = 3, ["2x"] = 3, ["4x"] = 8 } },
+      { pos = 5, values = { Off = 4, ["2x"] = 9, ["4x"] = 4 } },
+   })
+end
+
+function TestChunkPatch:test_patch_to_label_reconstructs_b()
+   local a = string.char(0, 1, 2, 3, 4)
+   local b = string.char(0, 1, 9, 3, 9)
+   local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+   lu.assertEquals(core.patch_blob(a, entries, "2x"), b)
+end
+
+function TestChunkPatch:test_patch_to_off_reconstructs_a()
+   local a = string.char(0, 1, 2, 3, 4)
+   local b = string.char(0, 1, 9, 3, 9)
+   local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+   lu.assertEquals(core.patch_blob(b, entries, "Off"), a)
+end
+
+function TestChunkPatch:test_patch_leaves_already_targeted_blob_untouched()
+   local a = string.char(0, 1, 2, 3, 4)
+   local b = string.char(0, 1, 9, 3, 9)
+   local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+   lu.assertEquals(core.patch_blob(a, entries, "Off"), a)
+   lu.assertEquals(core.patch_blob(b, entries, "2x"), b)
+end
+
+function TestChunkPatch:test_patch_sets_mapped_bytes_and_preserves_unmapped_bytes()
+   local a = string.char(0, 1, 2, 3, 4)
+   local b = string.char(0, 1, 9, 3, 9)
+   local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+   -- Unknown current values are overwritten only at learned positions.
+   local weird = string.char(0, 7, 8, 3, 4)
+   lu.assertEquals(core.patch_blob(weird, entries, "2x"), string.char(0, 7, 9, 3, 9))
+end
+
+function TestChunkPatch:test_detects_each_label_after_patching_between_states()
+   local blobs = { string.char(0, 0, 0), string.char(0, 128, 63), string.char(0, 0, 64) }
+   local labels = { "Off", "2x", "4x" }
+   local entries = core.diff_blobs_multi(blobs, labels)
+   for _, source in ipairs(blobs) do
+      for i, label in ipairs(labels) do
+         local patched = core.patch_blob(source, entries, label)
+         lu.assertEquals(patched, blobs[i])
+         lu.assertEquals(core.detect_label(patched, entries), label)
+      end
+   end
+end
+
+function TestChunkPatch:test_handles_null_bytes()
+   -- Blobs may contain embedded zeros; diff/patch must stay byte-accurate.
+   local a = string.char(0, 0, 255, 0)
+   local b = string.char(0, 0, 128, 0)
+   local c = string.char(0, 0, 0, 0)
+   local entries = core.diff_blobs_multi({ a, b, c }, { "Off", "2x", "4x" })
+   lu.assertEquals(entries, { { pos = 3, values = { Off = 255, ["2x"] = 128, ["4x"] = 0 } } })
+   lu.assertEquals(core.patch_blob(a, entries, "2x"), b)
+   lu.assertEquals(core.patch_blob(b, entries, "4x"), c)
+end
+
+function TestChunkPatch:test_empty_entries_is_noop()
+   local a = string.char(1, 2, 3)
+   lu.assertEquals(core.patch_blob(a, {}, "2x"), a)
+   lu.assertIsNil(core.detect_label(a, {}))
+end
+
+function TestChunkPatch:test_patch_skips_unknown_targets_and_out_of_range_positions()
+   local blob = string.char(1, 2, 3)
+   local entries = {
+      { pos = 0, values = { ["2x"] = 9 } },
+      { pos = 2, values = { Off = 2 } },
+      { pos = 3, values = { ["2x"] = 0 } },
+      { pos = 4, values = { ["2x"] = 9 } },
+   }
+   lu.assertEquals(core.patch_blob(blob, entries, "missing"), blob)
+   lu.assertEquals(core.patch_blob(blob, entries, "2x"), string.char(1, 2, 0))
+end
+
+function TestChunkPatch:test_diff_uses_shortest_blob_length()
+   lu.assertEquals(core.diff_blobs_multi({ string.char(1, 2, 3), string.char(1, 4) },
+      { "Off", "2x" }), { { pos = 2, values = { Off = 2, ["2x"] = 4 } } })
+end
+
+function TestChunkPatch:test_diff_requires_multiple_blobs_and_matching_labels()
+   lu.assertEquals(core.diff_blobs_multi({}, {}), {})
+   lu.assertEquals(core.diff_blobs_multi({ "a" }, { "Off" }), {})
+   lu.assertEquals(core.diff_blobs_multi({ "a", "b" }, { "Off" }), {})
+   lu.assertEquals(core.diff_blobs_multi({ "a", "a" }, { "Off", "2x" }), {})
+end
+
+function TestChunkPatch:test_osig_encode_decode_round_trip()
+   local entries = {
+      { pos = 3, values = { Off = 2, ["2x"] = 9, ["4x"] = 128 } },
+      { pos = 5, values = { Off = 4, ["2x"] = 9, ["4x"] = 9 } },
+      { pos = 1024, values = { ["Mode; Low / Off"] = 0, ["Mode; High / 4x"] = 255 } },
+   }
+   local encoded = core.encode_osig(entries)
+   local decoded = core.decode_osig(encoded)
+   lu.assertEquals(decoded, entries)
+end
+
+function TestChunkPatch:test_osig_decode_splits_nul_delimited_fields()
+   -- Literal NULs inside pattern character classes fail on Lua 5.1/LuaJIT.
+   local field = table.concat({ "1024", "Off", "0", "Mode; High / 4x", "255" }, "\0")
+   lu.assertEquals(core.decode_osig(core.encode_field(field)), {
+      { pos = 1024, values = { Off = 0, ["Mode; High / 4x"] = 255 } },
+   })
+end
+
+function TestChunkPatch:test_osig_decode_ignores_malformed()
+    local encoded = core.encode_field("not,an,entry") ..
+       core.encode_field(table.concat({ "bad", "Off", "0" }, "\0")) ..
+       core.encode_field(table.concat({ "3", "Off", "bad" }, "\0")) ..
+       core.encode_field(table.concat({ "3", "Off", "0", "2x" }, "\0")) ..
+       core.encode_field(table.concat({ "5", "Off", "0" }, "\0"))
+    lu.assertEquals(core.decode_osig(encoded), { { pos = 5, values = { Off = 0 } } })
+end
+
+function TestChunkPatch:test_osig_decode_rejects_out_of_range_bytes_and_positions()
+    -- A malformed cached signature (byte 999, zero/negative/fractional position) must be
+    -- dropped rather than stored, so patch_blob's string.char never raises mid-Set.
+    local valid = table.concat({ "1", "Off", "99" }, "\0")
+    local bad_byte = table.concat({ "1", "Off", "999" }, "\0")
+    local bad_pos = table.concat({ "0", "Off", "5" }, "\0")
+    local fractional = table.concat({ "2.5", "Off", "5" }, "\0")
+    local decoded = core.decode_osig(core.encode_field(valid) .. core.encode_field(bad_byte)
+       .. core.encode_field(bad_pos) .. core.encode_field(fractional))
+    lu.assertEquals(decoded, { { pos = 1, values = { Off = 99 } } })
+end
+
+function TestKnownDevicesParameters:test_known_devices_parameters_excludes_devices_without_signature()
+    -- Pro-C 3 was recognised as a device but has no verified VST3 chunk signature; its
+    -- VST3 row would dead-end on Set, so it must not be recognised until a signature exists.
+    lu.assertIsNil(core.known_devices_parameters["FabFilter: Pro-C 3"])
+    lu.assertNotEquals(core.known_devices_parameters["FabFilter: Pro-C 2"], nil)
+end
+
+function TestChunkPatch:test_detect_label_returns_nil_when_no_byte_matches()
+     -- Non-empty entries, but the blob aligns with none of the learned bytes:
+     -- best_score stays 0, so detection must report failure rather than guess.
+     local entries = core.diff_blobs_multi({ string.char(9, 9, 9), string.char(1, 2, 3) },
+        { "A", "B" })
+     lu.assertIsNil(core.detect_label(string.char(0, 0, 0), entries))
+end
+
+function TestChunkPatch:test_patch_splices_large_blob_around_scattered_positions()
+     -- A 200-byte blob with three scattered positions changed to a new target.
+     local orig = {}
+     for i = 1, 200 do orig[i] = string.char(i % 256) end
+     local orig_blob = table.concat(orig)
+     local tarr = {}
+     for i = 1, 200 do tarr[i] = orig[i] end
+     tarr[1] = string.char(77)
+     tarr[100] = string.char(88)
+     tarr[200] = string.char(99)
+     local target_blob = table.concat(tarr)
+     local entries = core.diff_blobs_multi({ orig_blob, target_blob }, { "Off", "2x" })
+     local patched = core.patch_blob(orig_blob, entries, "2x")
+     lu.assertEquals(patched, target_blob)
+     lu.assertEquals(string.len(patched), 200)
+     -- Unchanged runs around the patch points are preserved exactly (splice path).
+     lu.assertEquals(string.sub(patched, 2, 99), string.sub(orig_blob, 2, 99))
+     lu.assertEquals(string.sub(patched, 101, 199), string.sub(orig_blob, 101, 199))
+end
+
+function TestChunkPatch:test_patch_returns_original_when_no_entries_apply()
+     -- No position maps to the requested target, so nothing is patched and the
+     -- original blob is returned without rebuilding it byte-by-byte.
+     local blob = string.char(1, 2, 3)
+     local entries = { { pos = 2, values = { Off = 2 } } }
+     lu.assertEquals(core.patch_blob(blob, entries, "missing"), blob)
+end
+
+function TestChunkPatch:test_detect_label_breaks_ties_deterministically()
+     -- Both labels score identically; the result must be the lexicographically
+     -- smallest label, independent of hash iteration order in Lua 5.1/JIT.
+     local entries = {
+        { pos = 1, values = { ["Zebra"] = 1, ["Alpha"] = 1 } },
+        { pos = 2, values = { ["Zebra"] = 2, ["Alpha"] = 2 } },
+     }
+     lu.assertEquals(core.detect_label(string.char(1, 2), entries), "Alpha")
+end
+
+
+
+--------------------------------------------------------------------------------
+-- base64 codec (b64encode / b64decode)
+--
+-- VST3 chunks are exchanged base64-encoded, so the codec must round-trip raw
+-- binary (including null bytes) exactly and follow RFC 4648 padding.
+
+TestBase64 = {}
+
+function TestBase64:test_known_vectors()
+    lu.assertEquals(core.b64encode("M"), "TQ==")
+    lu.assertEquals(core.b64encode("Ma"), "TWE=")
+    lu.assertEquals(core.b64encode("Man"), "TWFu")
+    lu.assertEquals(core.b64decode("TQ=="), "M")
+    lu.assertEquals(core.b64decode("TWE="), "Ma")
+    lu.assertEquals(core.b64decode("TWFu"), "Man")
+end
+
+function TestBase64:test_round_trips_all_byte_values()
+    local all = ""
+    for i = 0, 255 do all = all .. string.char(i) end
+    lu.assertEquals(core.b64decode(core.b64encode(all)), all)
+end
+
+function TestBase64:test_round_trips_various_lengths()
+    for len = 0, 6 do
+        local blob = string.rep(string.char(0xAB, 0xCD, 0xEF, 0x01), len)
+        lu.assertEquals(core.b64decode(core.b64encode(blob)), blob)
+    end
+end
+
+function TestBase64:test_decode_strips_whitespace_and_newlines()
+    -- Renoise sometimes wraps the encoded chunk; the decoder must tolerate it.
+    lu.assertEquals(core.b64decode("TQ ==\n"), "M")
+    lu.assertEquals(core.b64decode("  TWFu  "), "Man")
+end
+
+
+--------------------------------------------------------------------------------
+-- VST3 XML patching (patch_osig_xml / detect_label_xml / first_label)
+--
+-- The chunk lives base64-encoded inside <ParameterChunk><![CDATA[…]]></ParameterChunk>;
+-- the helpers decode, patch/detect on the binary, then re-encode.
+
+TestOsigXml = {}
+
+function TestOsigXml:make_xml(bin)
+    local b64 = core.b64encode(bin)
+    return "<DeviceChunkMachineData><ParameterChunk><![CDATA[" .. b64 .. "]]></ParameterChunk></DeviceChunkMachineData>"
+end
+
+function TestOsigXml:test_patch_reencodes_and_preserves_structure()
+    local a = string.char(0, 1, 2, 3, 4)
+    local b = string.char(0, 1, 9, 3, 9)
+    local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+    local xml = self:make_xml(a)
+    local patched = core.patch_osig_xml(xml, entries, "2x")
+    lu.assertNotIsNil(patched)
+    lu.assertNotIsNil(string.match(patched, "<ParameterChunk><!%[CDATA%["))
+    local nb64 = string.match(patched, "CDATA%[([%s%S]-)%]%]")
+    lu.assertEquals(core.b64decode(nb64), b)
+end
+
+function TestOsigXml:test_patch_returns_nil_without_parameter_chunk()
+    local entries = core.diff_blobs_multi({ string.char(0, 1, 2), string.char(0, 1, 9) },
+       { "Off", "2x" })
+    lu.assertIsNil(core.patch_osig_xml("<SomeOtherTag/>", entries, "2x"))
+end
+
+function TestOsigXml:test_patch_returns_nil_when_already_target()
+    local a = string.char(0, 1, 2, 3, 4)
+    local b = string.char(0, 1, 9, 3, 9)
+    local entries = core.diff_blobs_multi({ a, b }, { "Off", "2x" })
+    local xml = self:make_xml(b)
+    lu.assertIsNil(core.patch_osig_xml(xml, entries, "2x"))
+end
+
+function TestOsigXml:test_detect_reads_label_from_xml()
+    local b = string.char(0, 1, 9, 3, 9)
+    local entries = core.diff_blobs_multi({ string.char(0, 1, 2, 3, 4), b }, { "Off", "2x" })
+    local xml = self:make_xml(b)
+    lu.assertEquals(core.detect_label_xml(xml, entries), "2x")
+end
+
+function TestOsigXml:test_detect_returns_nil_without_parameter_chunk()
+    local entries = core.diff_blobs_multi({ string.char(0, 1, 2), string.char(0, 1, 9) },
+       { "Off", "2x" })
+    lu.assertIsNil(core.detect_label_xml("<SomeOtherTag/>", entries))
+end
+
+function TestOsigXml:test_first_label_and_empty_cases()
+    local entries = core.diff_blobs_multi({ string.char(0, 1), string.char(9, 9) }, { "Off", "2x" })
+    -- first_label returns next(entries[1].values); the concrete key order is
+    -- implementation-defined (hash-based in Lua 5.1/JIT), so accept either label.
+    local fl = core.first_label(entries)
+    lu.assertNotIsNil(fl)
+    lu.assertTrue(fl == "Off" or fl == "2x", "unexpected first label: " .. tostring(fl))
+    lu.assertIsNil(core.first_label({}))
+    lu.assertIsNil(core.first_label(nil))
+end
+
+
+--------------------------------------------------------------------------------
+-- osig dropdown sources (osig_choices / osig_axes)
+--
+-- The UI builds its oversampling dropdowns from these; they must return the
+-- declared labels/axes in order and nil for devices without a definition.
+
+TestOsigSources = {}
+
+function TestOsigSources:test_choices_in_known_order_with_indices()
+    lu.assertEquals(core.osig_choices("FabFilter: Pro-C 2"),
+       { { label = "Off", value = 1 }, { label = "2x", value = 2 }, { label = "4x", value = 3 } })
+end
+
+function TestOsigSources:test_choices_nil_for_unknown_device()
+    lu.assertIsNil(core.osig_choices("FabFilter: Unknown"))
+end
+
+function TestOsigSources:test_axes_for_multi_axis_device()
+    lu.assertEquals(core.osig_axes("FabFilter: Saturn 2"), {
+        { name = "High Quality", labels = { "Off", "Good", "Superb" } },
+        { name = "Linear Phase", labels = { "Off", "On" } },
+    })
+end
+
+function TestOsigSources:test_axes_nil_for_single_axis_device()
+    lu.assertIsNil(core.osig_axes("FabFilter: Pro-C 2"))
 end
 
 

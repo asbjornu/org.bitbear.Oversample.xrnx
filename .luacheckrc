@@ -35,6 +35,7 @@ globals = {
   "save_tool_cache",
   "save_global_cache",
   "save_global_device_name_cache",
+  "save_global_osig",
   "prune_parameter_cache",
   "oversample_on_new_song",
   "oversample_init",
@@ -76,6 +77,14 @@ files = {
       "TestKnownPrimarySecondary",
       "TestNearestChoiceIndex",
       "TestResolveTargetIndices",
+      "TestChunkPatch",
+      "TestNormalizeDeviceName",
+      "TestBase64",
+      "TestOsigXml",
+      "TestOsigSources",
     },
+  },
+  ["test/oversample_ui_test.lua"] = {
+    globals = { "TestDialogLayout" },
   },
 }
