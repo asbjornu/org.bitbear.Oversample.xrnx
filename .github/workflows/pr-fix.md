@@ -2,7 +2,7 @@
 on:
   pull_request_review:
     types: [submitted]
-if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'commented'
+if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'COMMENTED'
 permissions:
   pull-requests: read
   copilot-requests: write
