@@ -1,12 +1,11 @@
 ---
-engine:
-  id: opencode
-  display-name: OpenCode
-  description: OpenCode CLI with headless mode and multi-provider LLM support
-  runtime-id: opencode
-  experimental: true
-  detection-engine: copilot
-  behaviors:
+id: opencode
+display-name: OpenCode
+description: OpenCode CLI with headless mode and multi-provider LLM support
+runtime-id: opencode
+experimental: true
+detection-engine: copilot
+behaviors:
     secret-strategy: universal-llm-consumer
     capabilities:
       max-turns: true
