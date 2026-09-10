@@ -1,0 +1,84 @@
+---
+engine:
+  id: opencode
+  display-name: OpenCode
+  description: OpenCode CLI with headless mode and multi-provider LLM support
+  runtime-id: opencode
+  experimental: true
+  detection-engine: copilot
+  behaviors:
+    secret-strategy: universal-llm-consumer
+    capabilities:
+      max-turns: true
+    manifest:
+      files:
+        - opencode.jsonc
+        - AGENTS.md
+      path-prefixes:
+        - .opencode/
+    network:
+      defaults:
+        - host.docker.internal
+        - github.com
+        - raw.githubusercontent.com
+        - opencode.ai
+        - models.dev
+      provider-domains:
+        copilot: api.githubcopilot.com
+        anthropic: api.anthropic.com
+        openai: api.openai.com
+    installation:
+      package-manager: npm
+      package-name: opencode-ai
+      version: "1.2.14"
+      step-name: Install OpenCode CLI
+      binary-name: opencode
+      include-node-setup: true
+      cooldown: true
+      verify-command: opencode --version
+      verify-step-name: Verify OpenCode CLI installation
+      docs-url: https://opencode.ai/docs
+    config-file:
+      path: opencode.jsonc
+      step-name: Write OpenCode Config
+      content: |-
+        {
+          "agent": {
+            "build": {
+              "permission": {
+                "bash": "allow",
+                "edit": "allow",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "external_directory": "allow"
+              }
+            }
+          },
+          "autoupdate": false
+        }
+      merge-strategy: json-merge
+    execution:
+      command-name: opencode
+      args:
+        - run
+        - --print-logs
+        - --log-level
+        - DEBUG
+      step-name: Execute OpenCode CLI
+      model-env-var: OPENCODE_MODEL
+      mcp-config-env-var: GH_AW_MCP_CONFIG
+      write-timestamp: true
+      provider-env-mode: universal-llm-consumer
+    mcp:
+      config-path: opencode.jsonc
+---
+
+# OpenCode engine definition (vendored sample)
+
+This is the unsupported sample engine definition from the gh-aw docs. The
+OpenCode project owner should publish and maintain the production integration.
+Import it from a workflow with `imports: [shared/opencode.md]` and set
+`engine: opencode`.
