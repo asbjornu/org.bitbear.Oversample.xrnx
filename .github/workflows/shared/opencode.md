@@ -1,11 +1,12 @@
 ---
-id: opencode
-display-name: OpenCode
-description: OpenCode CLI with headless mode and multi-provider LLM support
-runtime-id: opencode
-experimental: true
-detection-engine: copilot
-behaviors:
+engine:
+  id: opencode
+  display-name: OpenCode
+  description: OpenCode CLI with headless mode and multi-provider LLM support
+  runtime-id: opencode
+  experimental: true
+  detection-engine: copilot
+  behaviors:
     secret-strategy: universal-llm-consumer
     capabilities:
       max-turns: true
@@ -77,7 +78,8 @@ behaviors:
 
 # OpenCode engine definition (vendored sample)
 
-This is the unsupported sample engine definition from the gh-aw docs. The
-OpenCode project owner should publish and maintain the production integration.
-Import it from a workflow with `imports: [shared/opencode.md]` and set
-`engine: opencode`.
+Import from a workflow with `imports: [shared/opencode.md]` and set
+`engine: opencode`. OpenCode is provider-agnostic (BYOK); set the
+provider credentials via a repository secret (e.g. ANTHROPIC_API_KEY for
+the Anthropic provider, or COPILOT_GITHUB_TOKEN when routing through
+GitHub Copilot with copilot-requests enabled).

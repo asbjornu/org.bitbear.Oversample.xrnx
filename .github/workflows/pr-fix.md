@@ -6,16 +6,24 @@ if: github.event.review.state == 'changes_requested'
 permissions:
   pull-requests: read
   copilot-requests: write
-engine: copilot
+engine:
+  id: opencode
+  version: "1.2.14"
+imports:
+  - shared/opencode.md
 model: copilot/gpt-5.1-codex
+network:
+  allowed:
+    - defaults
+    - copilot
 safe-outputs:
   push-to-pull-request-branch:
     max: 1
 ---
 
-# PR Fixer (Copilot)
+# PR Fixer (OpenCode)
 
-A Copilot review requested changes on this pull request. Fix it.
+A Copilot review requested changes on this pull request. Fix it with OpenCode.
 
 1. The pull request number is `${{ github.event.pull_request.number }}`. Read the
    latest Copilot review and its inline comments:
