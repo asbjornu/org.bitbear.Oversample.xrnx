@@ -7,6 +7,9 @@ on:
 if: >-
   (github.event_name == 'pull_request_review' && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'COMMENTED')
   || github.event_name == 'pull_request'
+permissions:
+  pull-requests: read
+  copilot-requests: write
 engine: copilot
 network:
   allowed:
@@ -15,6 +18,7 @@ network:
 safe-outputs:
   push-to-pull-request-branch:
     max: 1
+    github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
 ---
 
 # PR Fixer (Copilot)
