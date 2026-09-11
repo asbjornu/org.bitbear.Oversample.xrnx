@@ -15,7 +15,7 @@ engine:
   version: "1.2.14"
 imports:
   - shared/opencode.md
-model: copilot/gpt-5.1-codex
+model: copilot/claude-sonnet-4.5
 network:
   allowed:
     - defaults
