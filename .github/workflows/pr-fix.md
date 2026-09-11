@@ -7,9 +7,6 @@ on:
 if: >-
   (github.event_name == 'pull_request_review' && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'COMMENTED')
   || github.event_name == 'pull_request'
-permissions:
-  pull-requests: read
-  copilot-requests: write
 engine: copilot
 network:
   allowed:
