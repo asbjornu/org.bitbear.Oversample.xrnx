@@ -11,7 +11,6 @@ permissions:
   pull-requests: read
   copilot-requests: write
 engine: copilot
-model: copilot/claude-sonnet-4.5
 network:
   allowed:
     - defaults
