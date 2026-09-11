@@ -13,54 +13,80 @@ your song to their extremes, so you get the best quality when rendering a song
 to WAV, and then pull them back down again so you don't melt your CPU while
 producing.
 
+## Quick start
+
+1. Open **Tools > Oversample** in Renoise.
+2. Choose the target values, or use **Minimize** / **Maximize** to preview the
+   available extremes in the controls.
+3. Click **Set** to apply the targets to the devices in your song.
+
+After updating the installed tool, use **Tools > Reload all tools**, then reopen
+Oversample. Keep a backup of your song before applying changes.
+
 ## How it works
 
 The tool opens a dialog with a grid of *device/parameter rows*. Each row targets
-one device in the song and one (or two) of its parameters that affect quality:
+the active instances of a device name in the song and one (or two) of its quality
+settings, rather than one individual plugin instance:
 
-* When the tool is opened it automatically adds a row for every recognised
-  device it finds in the song (see *Known limitations* below for which devices
-  are recognised out of the box), and scans that device's parameters in the
-  background so the full parameter list is available in the row's dropdowns.
-* You can add more rows manually, and for any row you can pick *any* device and
-  *any* parameter — recognised or not — so the tool is not limited to the built-in
-  device list.
-* **Minimize** and **Maximize** are *preview-only*: they snap the row sliders to
-  the minimum/maximum values so you can eyeball the effect, but don't touch your
-  song. **Set** applies the current slider state to the actual devices. This way
-  you can dial in exactly which parameters go to min/max and which stay put
-  before committing.
+* Recognised devices get rows automatically, with fixed, right-aligned labels
+  for their known quality parameters.
+* Use **+** to add rows. For unrecognised devices, the tool scans exposed host
+  parameters and lets you select one from a dropdown. Known devices retain their
+  fixed quality parameter rather than offering arbitrary parameter selection.
+* **Minimize** and **Maximize** are *preview-only*: they select minimum/maximum
+  targets in the controls without applying those targets to the plugins.
+  **Set** applies the current targets to the actual devices.
 
-Only the recognised oversampling parameters (plus each row's selected parameters)
-are ever driven — never every parameter of a device — so unrelated settings are
-left alone.
+### FabFilter VST3 support
+
+The supported FabFilter VST3 plugins do not expose oversampling as a host
+parameter. Oversample instead patches known byte positions in the plugin state
+chunk embedded in Renoise's preset XML. Built-in signatures cover **Pro-Q 3**,
+**Pro-C 2**, **Pro-L 2**, **Pro-MB**, and **Saturn 2**. Other plugin formats can
+use exposed host parameters where available.
+
+Saturn 2 has two independent controls: **High Quality** (Off / Good / Superb)
+and **Linear Phase** (Off / On). Linear Phase remains available even when High
+Quality is Off.
+
+**Saving side effect:** before applying a state-chunk target, Set attempts to
+save a song that already has a filename, to refresh Renoise's cached plugin
+state. This also saves any other pending song changes. Songs without a filename
+skip this step without opening a save dialog. The save is before patching, not
+a guarantee that all newly applied targets have been saved; save again afterward
+if you want to persist them.
 
 ### Caching
 
-Enumerating every parameter of every plugin is what used to make the tool slow.
-Parameter lists only change when a plugin is added, removed, or its preset
-changes, so Oversample caches them:
+Enumerating plugin parameters can be slow, so Oversample caches parameter lists
+and device names:
 
 * A **per-song cache** is stored inside the song file via
   `renoise.song().tool_data`. It travels with the `.xrns` and overrides the
-  machine-wide cache, so reopening a song is instant.
+  machine-wide parameter cache, reducing repeat scans when reopening a song.
 * A **machine-wide cache** is stored in the tool's `preferences.xml` and survives
   across songs and sessions.
 
-Both caches are populated lazily as devices are scanned, and invalidated
-automatically when a plugin is added/removed or its preset changes. The first
-time you open a brand-new song with many plugins it still takes a moment to scan
-them, but afterwards it's instant.
+Caches are populated lazily and refreshed or invalidated as devices and presets
+change. Reopening is usually faster, but new or changed devices may still need
+scanning. Known VST3 signatures avoid enumerating quality parameters that the
+plugin does not expose.
 
 ## Known limitations
 
-* Only FabFilter plugins are *recognised automatically* (and only their quality
-  parameters are preselected). For other plugins you can still target any
-  parameter manually via a row's dropdowns — auto-recognition is just a
-  convenience.
-* Adding more rows than necessary is harmless: when **Set**, **Minimize** or
-  **Maximize** is applied, each targeted device parameter is de-duplicated, so a
-  parameter can only be driven once even if it appears in several rows.
+* Only FabFilter plugins are recognised automatically. Manual parameter selection
+  for other plugins is limited to parameters exposed to Renoise; it cannot expose
+  an otherwise hidden quality setting.
+* State-chunk signatures depend on the plugin's serialized format. Plugin updates
+  may require new signatures; version compatibility is not automatically verified.
+  Check the resulting settings in the plugin, especially after an update.
+* Chunk patching is intended to change only the selected quality settings, but
+  stale cached state or an incompatible signature can affect other settings.
+  Unsaved songs skip the state-refresh save, and a failed save does not stop
+  patching. Keep backups rather than relying on unrelated settings being preserved.
+* Avoid duplicate rows for the same target. Set applies rows in order, so later
+  rows can overwrite earlier targets; duplicates are not guaranteed to be harmless.
 
 ## Disclaimer
 
@@ -75,17 +101,25 @@ needs and may still not work for you.**
 
 The pure, Renoise-independent logic lives in `Oversample/oversample_core.lua` and
 is unit-tested with [luaunit][luaunit] in `test/oversample_core_test.lua`, which
-runs in CI via the Test workflow under [luacov][luacov]. Every public function of
-that core module is exercised by the suite, and its line coverage is measured by
-luacov and reported to [Codecov][codecov]; the badge above shows the live
-coverage (the few untested lines are defensive branches for an unused data
-shape).
+runs in CI via the Test workflow under [luacov][luacov]. Core coverage is reported
+to [Codecov][codecov].
 
-`Oversample/Oversample.lua` and `main.lua` are coupled to the Renoise runtime (the
-`renoise` global and `ViewBuilder`) and cannot run outside of Renoise, so they are
-intentionally excluded from unit testing. The Codecov badge therefore reflects
-only the testable core module, not the whole tool (the luacov report is scoped to
-`Oversample` via `.luacov`).
+`test/oversample_ui_test.lua` uses a small ViewBuilder stub to check footer sizing,
+fixed status dimensions, secondary visibility, control switching, and add-button
+placement. It exercises the actual dialog code but does not emulate native text
+metrics, clipping, rendering, or notifier timing. After UI changes, reload the
+tool in Renoise and visually check the dialog as well.
+
+Run both suites from the tool root after installing the rockspec dependencies:
+
+```sh
+eval "$(luarocks path)"
+lua test/oversample_core_test.lua
+lua test/oversample_ui_test.lua
+```
+
+CI runs both suites with Lua 5.1 and LuaJIT. UI stub tests are excluded from the
+coverage report, so the badge continues to reflect only the core module.
 
   [renoise]: https://www.renoise.com/
   [luaunit]: https://github.com/bluebird75/luaUnit
