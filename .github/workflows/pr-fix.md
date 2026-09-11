@@ -10,11 +10,7 @@ if: >-
 permissions:
   pull-requests: read
   copilot-requests: write
-engine:
-  id: opencode
-  version: "1.2.14"
-imports:
-  - shared/opencode.md
+engine: copilot
 model: copilot/claude-sonnet-4.5
 network:
   allowed:
@@ -25,7 +21,7 @@ safe-outputs:
     max: 1
 ---
 
-# PR Fixer (OpenCode)
+# PR Fixer (Copilot)
 
 A native GitHub Copilot review was posted on this pull request (or a new push
 landed). Fix the issues Copilot raised.
