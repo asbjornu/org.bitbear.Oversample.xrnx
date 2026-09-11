@@ -2,7 +2,11 @@
 on:
   pull_request_review:
     types: [submitted]
-if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'COMMENTED'
+  pull_request:
+    types: [synchronize, opened]
+if: >-
+  (github.event_name == 'pull_request_review' && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]' && github.event.review.state == 'COMMENTED')
+  || github.event_name == 'pull_request'
 permissions:
   pull-requests: read
   copilot-requests: write
@@ -23,21 +27,20 @@ safe-outputs:
 
 # PR Fixer (OpenCode)
 
-A native GitHub Copilot review (`copilot-pull-request-reviewer[bot]`) was posted
-on this pull request. Fix the issues it raised.
+A native GitHub Copilot review was posted on this pull request (or a new push
+landed). Fix the issues Copilot raised.
 
-1. List reviews and locate the one from `copilot-pull-request-reviewer[bot]`:
-   - `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews`
-2. Read its inline comments:
+1. Read all inline review comments on the PR:
    - `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
-3. If the review contains concrete, actionable issues, address each one
-   (file:line + the fix). Do not make unrelated changes. Keep edits minimal and
-   aligned with existing code style. Commit your fixes locally with `git add`
-   and `git commit`.
-4. If the review has no actionable issues, make no changes and do not push.
-5. When you have committed fixes, push them to this pull request's branch by
-   calling the `push_to_pull_request_branch` safe output.
+   These are the comments from `copilot-pull-request-reviewer[bot]`.
+2. If there are concrete, actionable issues, address each one (file:line + the
+   fix). Do not make unrelated changes. Keep edits minimal and aligned with the
+   existing code style. Commit your fixes locally with `git add` and `git commit`.
+3. If there are no actionable issues remaining (e.g. they were already resolved
+   by a previous push), make NO changes and do NOT push.
+4. Only when you have committed a substantive fix, push it to this pull request's
+   branch by calling the `push_to_pull_request_branch` safe output.
 
-Your push re-triggers the native Copilot review on the updated PR (the review
-gate is configured in repository settings). The loop ends when Copilot approves
-(no further `commented` review is posted).
+Your push re-triggers the native Copilot review (the review gate is configured
+in repository settings). The loop ends when Copilot approves or when no
+actionable comments remain.
