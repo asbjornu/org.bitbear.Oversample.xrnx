@@ -23,6 +23,14 @@ safe-outputs:
 
 # PR Fixer (Copilot)
 
+<!--
+Push auth: the push_to_pull_request_branch safe output pushes with the
+GH_AW_PUSH_TOKEN repo secret (a PAT with contents: write, pull-requests:
+write, and workflow scopes). gh-aw strict mode forbids granting contents:
+write to the GITHUB_TOKEN, so a dedicated PAT is required; GitHub also
+refuses PAT pushes that touch .github/workflows/* without the workflow scope.
+-->
+
 A native GitHub Copilot review was posted on this pull request (or a new push
 landed). Fix the issues Copilot raised.
 
