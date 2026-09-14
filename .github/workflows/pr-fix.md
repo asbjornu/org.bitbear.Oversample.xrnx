@@ -8,7 +8,7 @@ on:
 if: >-
   github.event_name == 'pull_request_review'
   && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-  && github.event.review.state == 'COMMENTED'
+  && github.event.review.state == 'commented'
   && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
 permissions:
   pull-requests: read
