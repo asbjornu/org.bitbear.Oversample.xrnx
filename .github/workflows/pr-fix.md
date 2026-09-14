@@ -2,6 +2,7 @@
 on:
   pull_request_review:
     types: [submitted]
+    max-stack: -1
   bots:
     - copilot-pull-request-reviewer[bot]
 if: >-
