@@ -32,6 +32,37 @@ safe-outputs:
       - "*.md"
       - "*.lua"
       - "LICENSE"
+  jobs:
+    resolve-threads:
+      description: "Resolve (hide, mark 'Resolved') the Copilot review threads the agent addressed"
+      runs-on: ubuntu-latest
+      output: "Resolved addressed Copilot review threads"
+      permissions:
+        pull-requests: write
+      inputs:
+        thread_ids:
+          description: "Comma-separated list of review thread node IDs to resolve"
+          required: true
+          type: string
+      steps:
+        - name: Resolve addressed review threads
+          env:
+            GH_TOKEN: ${{ github.token }}
+          run: |
+            set -euo pipefail
+            test -f "$GH_AW_AGENT_OUTPUT" || { echo "No agent output file"; exit 1; }
+            ids=$(jq -r '.items[] | select(.type == "resolve_threads") | .thread_ids' \
+              "$GH_AW_AGENT_OUTPUT" | tr ',' '\n' | sed 's/[[:space:]]//g' | grep -v '^$')
+            if [ -z "$ids" ]; then
+              echo "No threads to resolve"
+              exit 0
+            fi
+            echo "$ids" | while read -r tid; do
+              echo "Resolving thread $tid"
+              gh api graphql \
+                -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
+                -f id="$tid"
+            done
 ---
 
 # PR Fixer (Copilot)
@@ -68,18 +99,29 @@ Copilot raised in THAT review (do not process other reviews).
 
 1. Read this review's inline comments:
    `gh api --paginate repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews/${{ github.event.review.id }}/comments`
-   Comments from `copilot-pull-request-reviewer[bot]` are the ones to address.
-   Do not re-fix comments on threads already marked resolved. The REST comment
-   endpoints expose no resolved status, so fetch the PR's review threads via
-   GraphQL and skip resolved ones:
-   `gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:1){nodes{... on PullRequest{reviewThreads(first:100){nodes{isResolved,comments(first:1){nodes{author{login},body,pullRequestReview{databaseId}}}}}}}}}' -f q="repo:${{ github.repository }} is:pr number:${{ github.event.pull_request.number }}"`
+   Each comment carries an `id` (its database id). Comments from
+   `copilot-pull-request-reviewer[bot]` are the ones to address. Do not re-fix
+   comments on threads already marked resolved. The REST comment endpoints expose
+   no resolved status, so also fetch the PR's review threads via GraphQL to learn
+   each thread's node `id`, its resolved state, and the comment `databaseId`s it
+   contains (you will need these to resolve threads later):
+   `gh api graphql -f query='query($q:String!){search(query:$q,type:ISSUE,first:1){nodes{... on PullRequest{reviewThreads(first:100){nodes{id,isResolved,comments(first:50){nodes{databaseId,author{login},body,pullRequestReview{databaseId}}}}}}}}}' -f q="repo:${{ github.repository }} is:pr number:${{ github.event.pull_request.number }}"`
 2. If there are concrete, actionable issues, address each one (file:line + the
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.
    Keep edits minimal and aligned with the existing code style. Commit your
    fixes locally with `git add` and `git commit`.
 3. If there are no actionable issues remaining, make NO changes and do NOT push.
-4. Only when you have committed a substantive fix, push it to this pull request's
-   branch by calling the `push_to_pull_request_branch` safe output.
+ 4. After committing a substantive fix, resolve (hide) the Copilot comments you
+    addressed by marking their review threads "Resolved":
+    - For every comment you fixed, find the thread whose `comments.nodes.databaseId`
+      matches that comment's `id` from step 1.
+    - Collect the matched thread node `id`s that are still `isResolved: false`
+      (only threads you actually changed).
+    - Call the `resolve_threads` safe-output tool with those thread node `id`s as a
+      single comma-separated string. The tool resolves them. Do not resolve
+      unrelated threads.
+5. Push the committed fix to this pull request's branch by calling the
+   `push_to_pull_request_branch` safe output.
 
 Your push re-triggers the native Copilot review (the review gate is configured
 in repository settings). The loop ends when Copilot approves or when no
