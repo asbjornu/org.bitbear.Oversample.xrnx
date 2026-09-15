@@ -3,13 +3,20 @@ on:
   pull_request_review:
     types: [submitted]
     max-stack: -1
+  pull_request_review_comment:
+    types: [created]
   bots:
     - copilot-pull-request-reviewer[bot]
+    - Copilot
+  roles: all
 if: >-
-  github.event_name == 'pull_request_review'
-  && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-  && github.event.review.state == 'commented'
-  && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
+  (github.event_name == 'pull_request_review'
+   && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
+   && github.event.review.state == 'commented'
+   && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id)
+  || (github.event_name == 'pull_request_review_comment'
+   && github.event.comment.user.login == 'Copilot'
+   && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id)
 permissions:
   contents: read
   pull-requests: read
@@ -76,21 +83,28 @@ Security notes:
   are granted contents: write on the job token in addition to GH_AW_PUSH_TOKEN.
   This broader grant is required by gh-aw's safe-output push; the default
   repository token is still not used for the push itself (the PAT is).
-- Trigger: this workflow runs only when Copilot posts a `commented` review on
-  a same-repo PR. It does not run on every push, so the native Copilot review
-  is the single gate that drives the loop.
+- Trigger: this workflow runs when Copilot posts a `commented` review, or an
+  inline review comment, on a same-repo PR. Copilot's agentic code review is
+  posted with GITHUB_TOKEN, so a `pull_request_review` event alone is
+  suppressed by GitHub's anti-recursion rule; `pull_request_review_comment`
+  still fires. `roles: all` skips gh-aw's membership check, which 404s on the
+  `Copilot` bot login. It does not run on every push, so the native Copilot
+  review is the single gate that drives the loop.
 -->
 
-A native GitHub Copilot review was posted on this pull request. Fix the
-unresolved issues Copilot raised in its review.
+A native GitHub Copilot review or inline review comment was posted on this pull
+request. Fix the unresolved issues Copilot raised.
 
 1. Read the pull request's review threads with the GitHub MCP tool
    `get_pull_request_review_comments` for PR
    `${{ github.event.pull_request.number }}`. It returns each review thread's
    GraphQL `id` (a `PRRT_...` value), its `is_resolved` flag, and its comments
    (body, path, line, author, html_url). Work only on unresolved, non-outdated
-   threads whose comments are authored by `copilot-pull-request-reviewer`. Do
-   not re-fix threads that are already resolved.
+   threads whose comments are authored by `Copilot` or
+   `copilot-pull-request-reviewer`. Do not re-fix threads already resolved.
+   Also use `get_pull_request_reviews` to read the most recent Copilot review
+   body; if it lists findings under "Suppressed comments" (which have no
+   thread), treat the concrete ones as actionable too.
 
 2. If there are concrete, actionable issues, address each one (file:line + the
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.
@@ -121,6 +135,6 @@ unresolved issues Copilot raised in its review.
 6. Push the committed fix to this pull request's branch by calling the
    `push_to_pull_request_branch` safe output.
 
-Your push re-triggers the native Copilot review (the review gate is configured
-in repository settings). The loop ends when Copilot approves or when no
-actionable comments remain.
+If the repository's automatic Copilot code review is enabled, your push
+triggers a fresh review; otherwise a maintainer re-requests it. The loop ends
+when Copilot approves or when no actionable comments remain.
