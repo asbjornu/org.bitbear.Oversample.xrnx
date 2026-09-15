@@ -6,17 +6,18 @@ on:
   pull_request_review_comment:
     types: [created]
   bots:
-    - copilot-pull-request-reviewer[bot]
     - Copilot
+    - copilot-pull-request-reviewer[bot]
   roles: all
 if: >-
-  (github.event_name == 'pull_request_review'
-   && github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
-   && github.event.review.state == 'commented'
-   && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id)
-  || (github.event_name == 'pull_request_review_comment'
-   && github.event.comment.user.login == 'Copilot'
-   && github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id)
+  github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
+  && (
+    (github.event_name == 'pull_request_review'
+      && contains(fromJSON('["Copilot","copilot","copilot-pull-request-reviewer[bot]"]'), github.event.review.user.login)
+      && contains(fromJSON('["commented","COMMENTED"]'), github.event.review.state))
+    || (github.event_name == 'pull_request_review_comment'
+      && contains(fromJSON('["Copilot","copilot","copilot-pull-request-reviewer[bot]"]'), github.event.comment.user.login))
+  )
 permissions:
   contents: read
   pull-requests: read
@@ -87,9 +88,12 @@ Security notes:
   inline review comment, on a same-repo PR. Copilot's agentic code review is
   posted with GITHUB_TOKEN, so a `pull_request_review` event alone is
   suppressed by GitHub's anti-recursion rule; `pull_request_review_comment`
-  still fires. `roles: all` skips gh-aw's membership check, which 404s on the
-  `Copilot` bot login. It does not run on every push, so the native Copilot
-  review is the single gate that drives the loop.
+  still fires. The event exposes the review author as `Copilot` (the REST API
+  reports `copilot-pull-request-reviewer[bot]`), so the guard accepts either
+  spelling and both review-state casings. `roles: all` skips gh-aw's
+  membership check, which 404s on the `Copilot` bot login. It does not run on
+  every push, so the native Copilot review is the single gate that drives the
+  loop.
 -->
 
 A native GitHub Copilot review or inline review comment was posted on this pull
