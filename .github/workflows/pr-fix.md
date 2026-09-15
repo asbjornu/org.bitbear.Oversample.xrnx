@@ -81,17 +81,16 @@ Security notes:
   is the single gate that drives the loop.
 -->
 
-A native GitHub Copilot review was posted on this pull request. Fix the issues
-Copilot raised in THAT review only (do not process other reviews).
+A native GitHub Copilot review was posted on this pull request. Fix the
+unresolved issues Copilot raised in its review.
 
-1. Use the GitHub MCP tools to read the triggering review and its comments.
-   Call `get_pull_request_reviews` for PR
-   `${{ github.event.pull_request.number }}` and pick the review with id
-   `${{ github.event.review.id }}` (author `copilot-pull-request-reviewer[bot]`).
-   Then call `get_pull_request_review_comments` (or `get_pull_request_comments`)
-   with that review's id to list its inline comments. For each comment keep its
-   database `id` and its GraphQL `node_id` (the `PRRC_...` value). Do not re-fix
-   comments whose thread is already resolved.
+1. Read the pull request's review threads with the GitHub MCP tool
+   `get_pull_request_review_comments` for PR
+   `${{ github.event.pull_request.number }}`. It returns each review thread's
+   GraphQL `id` (a `PRRT_...` value), its `is_resolved` flag, and its comments
+   (body, path, line, author, html_url). Work only on unresolved, non-outdated
+   threads whose comments are authored by `copilot-pull-request-reviewer`. Do
+   not re-fix threads that are already resolved.
 
 2. If there are concrete, actionable issues, address each one (file:line + the
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.
@@ -101,20 +100,23 @@ Copilot raised in THAT review only (do not process other reviews).
 3. If there are no actionable issues remaining, make NO changes and do NOT push.
 
 4. After committing a substantive fix, explain it on the review:
-   - For every comment you fixed, call the
-     `reply_to_pull_request_review_comment` safe-output tool once with
-     `comment_id` set to that comment's database `id` and `body` set to a
-     concise, accurate explanation of how you addressed that specific complaint
-     (reference file:line). Keep each reply minimal.
+   - For every thread you fixed, reply to its first Copilot comment by calling
+     the `reply_to_pull_request_review_comment` safe-output tool with
+     `comment_id` set to that comment's numeric database id and `body` set to a
+     concise explanation of how you addressed that specific complaint
+     (reference file:line). Derive the numeric id from the comment's `html_url`:
+     it is the number after `discussion_r` (e.g.
+     `.../pull/8#discussion_r4010111827` -> `4010111827`). One call per fixed
+     thread. Keep each reply minimal.
    - Then call the `add_comment` safe-output tool once with a short summary of
      how the review's complaints were addressed overall.
 
 5. Resolve the Copilot threads you addressed:
-   - For every comment you fixed, call the
+   - For every thread you fixed, call the
      `resolve_pull_request_review_thread` safe-output tool with `thread_id` set
-     to that comment's GraphQL `node_id` (the `PRRC_...` value). The tool
-     resolves the review thread that contains the comment.
-   - Only resolve threads you actually changed. Do not resolve unrelated threads.
+     to that thread's `PRRT_...` `id` from step 1.
+   - Only resolve threads you actually changed. Never resolve an unresolved
+     thread that you did not fix.
 
 6. Push the committed fix to this pull request's branch by calling the
    `push_to_pull_request_branch` safe output.
