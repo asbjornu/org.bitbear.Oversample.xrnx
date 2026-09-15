@@ -19,7 +19,8 @@ require "Oversample/ProcessSlicer"
 local options = renoise.Document.create("preferences") {
   debug = true,
   cached_parameters = renoise.Document.ObservableStringList(),
-  cached_device_names = renoise.Document.ObservableStringList()
+  cached_device_names = renoise.Document.ObservableStringList(),
+  osig = renoise.Document.ObservableStringList()
 }
 
 --------------------------------------------------------------------------------
