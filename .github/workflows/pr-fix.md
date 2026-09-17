@@ -15,6 +15,7 @@ network:
 safe-outputs:
   push-to-pull-request-branch:
     max: 1
+    signed-commits: false
     github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
     allowed-files:
       - "Oversample/**"
@@ -132,6 +133,10 @@ raised.
    body; if it lists findings under "Suppressed comments" (which have no
    thread), treat the concrete ones as actionable too. The orchestrator
    dispatches this workflow for exactly those body-only reviews.
+   Before acting, confirm the newest Copilot review's `commit_id` equals the
+   PR's current head (`get_pull_request` -> `head.sha`). If they differ, the
+   review is stale because the branch moved after it was posted: call the
+   `noop` safe-output tool and stop.
 
 2. If there are concrete, actionable issues, address each one (file:line + the
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.

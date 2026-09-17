@@ -113,6 +113,12 @@ jobs:
               continue
             fi
 
+            head_now=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+            if [ "$head_now" != "$head" ]; then
+              echo "PR #$pr: head moved from $head to $head_now; not marking (will re-evaluate)"
+              continue
+            fi
+
             body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id -->"
             if [ -n "$prev_comment" ]; then
               gh api -X PATCH "repos/$REPO/issues/comments/$prev_comment" -f body="$body" >/dev/null

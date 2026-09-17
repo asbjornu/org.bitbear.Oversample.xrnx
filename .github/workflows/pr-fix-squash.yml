@@ -18,28 +18,14 @@ jobs:
       && github.event.pull_request.user.login == (vars.PR_FIX_AUTHOR || 'asbjornu')
     runs-on: ubuntu-latest
     steps:
-      - name: Check for an active fixer dispatch
-        id: fixer
-        env:
-          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          n=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
-            --jq '[.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | startswith("<!-- aw-pr-fix-state")))] | length')
-          echo "dispatched=$n" >> "$GITHUB_OUTPUT"
-
       - name: Check out the pull request branch
-        if: steps.fixer.outputs.dispatched != '0'
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GH_AW_PUSH_TOKEN }}
           fetch-depth: 0
 
-      - name: Autosquash fixup! commits and force-push
-        if: steps.fixer.outputs.dispatched != '0'
+      - name: Autosquash fixer-authored fixup! commits and force-push
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -48,8 +34,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
-          if ! git log "$base"..HEAD --format=%s | grep -q '^fixup! '; then
-            echo "No fixup! commits on this branch; nothing to squash"
+          # Only fold fixups the fixer created (authored by github-actions[bot]).
+          # If any other author has a fixup! in range, leave the branch alone so
+          # a contributor's own autosquash-style commits are never rewritten.
+          fixer_fixups=$(git log "$base"..HEAD --format='%an%x09%s' |
+            awk -F'\t' '$2 ~ /^fixup! / { if ($1 == "github-actions[bot]") good++; else bad++ } END { if (good > 0 && bad == 0) print "yes" }')
+          if [ "$fixer_fixups" != "yes" ]; then
+            echo "No fixer-authored fixup! commits; nothing to squash"
             exit 0
           fi
           GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash --rebase-merges "$base"
