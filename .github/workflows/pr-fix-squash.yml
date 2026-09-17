@@ -27,6 +27,9 @@ jobs:
 
       - name: Autosquash fixer-authored fixup! commits and force-push
         env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -34,40 +37,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
-          if ! git log "$base"..HEAD --format='%an%x09%s' |
-            awk -F'\t' '$2 ~ /^fixup! / && $1 == "github-actions[bot]" { found = 1 } END { exit !found }'; then
-            echo "No fixer-authored fixup! commits; nothing to squash"
+          # Use GitHub's author association for the fixup! commits rather than
+          # the local committer name, so a spoofed local author cannot be
+          # rewritten. Only fold when every fixup! commit is the fixer's; a
+          # branch that mixes in another author's fixup! is left untouched.
+          authors=$(gh api --paginate "repos/$REPO/pulls/$PR/commits?per_page=100" \
+            --jq '.[] | select(.commit.message | startswith("fixup!")) | (.author.login // "unknown")')
+          if [ -z "$authors" ]; then
+            echo "No fixup! commits; nothing to squash"
             exit 0
           fi
-          # Fold only the fixer's fixup! commits. Any other author's fixup!
-          # commit is kept as a normal pick (message unchanged), so a
-          # contributor's own autosquash commits are never rewritten.
-          cat > /tmp/seq-editor.sh <<'SCRIPT'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          todo="$1"
-          tmp="$(mktemp)"
-          while IFS= read -r line; do
-            cmd="${line%% *}"
-            case "$cmd" in
-              fixup|squash)
-                rest="${line#* }"
-                sha="${rest%% *}"
-                author="$(git log -1 --format=%an "$sha" 2>/dev/null || true)"
-                if [ "$author" = "github-actions[bot]" ]; then
-                  printf '%s\n' "$line" >> "$tmp"
-                else
-                  printf 'pick %s\n' "$rest" >> "$tmp"
-                fi
-                ;;
-              *)
-                printf '%s\n' "$line" >> "$tmp"
-                ;;
-            esac
-          done < "$todo"
-          mv "$tmp" "$todo"
-          SCRIPT
-          chmod +x /tmp/seq-editor.sh
-          GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --autosquash --rebase-merges "$base"
+          if printf '%s\n' "$authors" | grep -qv '^github-actions\[bot\]$'; then
+            echo "Non-fixer fixup! commits present; leaving the branch alone"
+            exit 0
+          fi
+          GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash --rebase-merges "$base"
           git push --force-with-lease origin "HEAD:$HEAD_REF"
           echo "Squashed and force-pushed $HEAD_REF"

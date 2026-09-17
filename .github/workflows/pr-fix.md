@@ -51,7 +51,10 @@ jobs:
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
         run: |
           set -euo pipefail
-          number=$(printf '%s' "$AW_CONTEXT" | jq -r '.item_number // empty')
+          number=""
+          if [ -n "$AW_CONTEXT" ]; then
+            number=$(printf '%s' "$AW_CONTEXT" | jq -r 'if .item_type == "pull_request" then (.item_number // empty) else empty end' 2>/dev/null || true)
+          fi
           if [ -z "$number" ]; then
             echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
