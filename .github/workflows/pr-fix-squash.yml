@@ -1,0 +1,164 @@
+name: PR Fixer Squash
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixer-squash-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  squash:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login == (vars.PR_FIX_AUTHOR || 'asbjornu')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          fetch-depth: 0
+
+      - name: Autosquash fixer-authored fixup! commits and force-push
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          token_user=$(gh api user --jq '.login')
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          base=$(git merge-base "origin/$BASE_REF" HEAD)
+
+          # Anchor the rewrite to a token-authored dispatch marker whose
+          # recorded head is an ancestor of the current head.
+          marker=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
+            | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
+          marker_id=$(printf '%s' "$marker" | awk -F'\t' '{ print $2 }')
+          marker_head=$(printf '%s' "$marker" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
+          if [ -z "$marker_head" ] || ! git merge-base --is-ancestor "$marker_head" HEAD; then
+            echo "No active fixer dispatch for this head; nothing to squash"
+            exit 0
+          fi
+
+          # Only commits pushed after the dispatch head are eligible: every one
+          # must be the fixer's and at least one must be a fixup!, so a
+          # contributor push in the window aborts the rewrite.
+          head=$(git rev-parse HEAD)
+          cmp=$(gh api "repos/$REPO/compare/$marker_head...$head" 2>/dev/null || echo '{}')
+          total=$(printf '%s' "$cmp" | jq -r '.total_commits // 0')
+          seen=$(printf '%s' "$cmp" | jq -r '(.commits // []) | length')
+          if [ "${total:-0}" -gt "${seen:-0}" ] 2>/dev/null; then
+            echo "Compare range truncated; refusing to rewrite"
+            exit 0
+          fi
+          range=$(printf '%s' "$cmp" \
+            | jq -r '(.commits // [])[] | "\(.author.login // "unknown")\t\(.commit.message | split("\n")[0])"')
+          verdict=$(printf '%s\n' "$range" | awk -F'\t' '
+            $1 != "github-actions[bot]" { bad = 1 }
+            $2 ~ /^fixup! / { good = 1 }
+            { any = 1 }
+            END {
+              if (bad) print "mixed";
+              else if (!any) print "empty";
+              else if (!good) print "normal";
+              else print "fixups";
+            }')
+          if [ "$verdict" != "fixups" ]; then
+            if [ "$verdict" = "normal" ]; then
+              echo "Only fixer normal commits since dispatch; requesting a review"
+              gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+                -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+            else
+              echo "Commits since the dispatch head are not purely fixer fixups; nothing to squash"
+            fi
+            exit 0
+          fi
+
+          # Move only the fixer's fixup! commits next to their targets and fold
+          # them; every other commit keeps its original position and message.
+          cat > /tmp/seq-editor.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          todo="$1"
+          mapfile -t raw < "$todo"
+          n=${#raw[@]}
+          declare -a cmd sha subj
+          for ((i=0; i<n; i++)); do
+            line="${raw[$i]}"
+            cmd[$i]="${line%% *}"
+            rest="${line#* }"
+            case "$rest" in
+              -C\ *|-c\ *) rest="${rest#* }" ;;
+            esac
+            token="${rest%% *}"
+            sha[$i]="$(git rev-parse --verify -q "${token}^{commit}" 2>/dev/null || echo "$token")"
+            subj[$i]="${rest#* }"
+          done
+          declare -A moved move_to
+          for ((i=0; i<n; i++)); do
+            if [[ "${subj[$i]:-}" == fixup!\ * ]]; then
+              author="$(git log -1 --format=%an "${sha[$i]}" 2>/dev/null || true)"
+              if [ "$author" = "github-actions[bot]" ]; then
+                found=""
+                target_sha="$(git log -1 --format=%B "${sha[$i]}" 2>/dev/null \
+                  | sed -n 's/^aw-fixup-target=\([0-9a-f]\{7,40\}\)[[:space:]]*$/\1/p' | tail -n 1)"
+                if [ -n "$target_sha" ]; then
+                  for ((k=0; k<n; k++)); do
+                    if [ "${sha[$k]}" = "$target_sha" ] && [ "${cmd[$k]}" = "pick" ]; then
+                      found=$k
+                      break
+                    fi
+                  done
+                else
+                  target="${subj[$i]#fixup! }"
+                  j=$((i-1))
+                  while [ $j -ge 0 ]; do
+                    if [[ "${cmd[$j]}" == "pick" && "${subj[$j]}" == "$target" ]]; then
+                      found=$j
+                      break
+                    fi
+                    j=$((j-1))
+                  done
+                fi
+                if [ -n "$found" ]; then
+                  moved[$i]=1
+                  move_to[$found]="${move_to[$found]:-} ${sha[$i]}"
+                fi
+              fi
+            fi
+          done
+          out="$(mktemp)"
+          for ((i=0; i<n; i++)); do
+            if [ -n "${moved[$i]:-}" ]; then continue; fi
+            printf '%s\n' "${raw[$i]}" >> "$out"
+            if [ -n "${move_to[$i]:-}" ]; then
+              for s in ${move_to[$i]}; do printf 'fixup %s\n' "$s" >> "$out"; done
+            fi
+          done
+          mv "$out" "$todo"
+          SCRIPT
+          chmod +x /tmp/seq-editor.sh
+
+          if GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --rebase-merges "$base" \
+            && git push --force-with-lease origin "HEAD:$HEAD_REF"; then
+            echo "Squashed and force-pushed $HEAD_REF"
+          else
+            git rebase --abort >/dev/null 2>&1 || true
+            echo "Squash failed; clearing the dispatch marker and requesting a review"
+            if [ -n "$marker_id" ]; then
+              gh api -X DELETE "repos/$REPO/issues/comments/$marker_id" >/dev/null 2>&1 || true
+            fi
+            gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+              -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+          fi

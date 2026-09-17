@@ -1,0 +1,146 @@
+name: PR Fixer Orchestrator
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: pr-fix-orchestrator
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository (for gh-aw resolution)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Ensure the gh-aw extension
+        run: gh extension install github/gh-aw >/dev/null 2>&1 || true
+
+      - name: Dispatch the fixer for new Copilot reviews
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+          AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
+          MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
+        run: |
+          set -euo pipefail
+          token_user=$(gh api user --jq '.login')
+          wf_id=$(gh api "repos/$REPO/actions/workflows" \
+            --jq '.workflows[] | select(.path == ".github/workflows/pr-fix.lock.yml") | .id')
+          if [ -z "$wf_id" ]; then
+            echo "pr-fix workflow not on the default branch yet; nothing to do"
+            exit 0
+          fi
+
+          inprogress=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=in_progress&per_page=1" --jq '.total_count')
+          queued=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=queued&per_page=1" --jq '.total_count')
+          if [ "${inprogress:-0}" != "0" ] || [ "${queued:-0}" != "0" ]; then
+            echo "A PR Fixer run is already pending; skipping this cycle"
+            exit 0
+          fi
+
+          # workflow_dispatch runs are not subject to the bot-approval gate, so
+          # there is no parked-run bypass here. A workflow_dispatch run records
+          # the default branch as its head_branch and its inputs are not exposed
+          # by the API, so a parked run cannot be reliably associated with a
+          # target PR; if one ever appears it is left for a human.
+
+          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | "\(.user.login)\t\(.number)"' |
+          while read -r author pr; do
+            if [ -z "$pr" ] || [ "$author" != "$AUTHOR" ]; then
+              continue
+            fi
+            head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+            review=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
+              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") | "\(.submitted_at)\t\(.commit_id)\t\(.state | ascii_upcase)\t\(.id)"' |
+              sort | awk -F'\t' -v h="$head" '$2 == h { st = $3; id = $4 } END { if (st == "COMMENTED") print id }')
+            if [ -z "$review" ]; then
+              echo "PR #$pr: no Copilot review on the current head"
+              continue
+            fi
+
+            # Only trust a marker written by a maintainer, so an untrusted
+            # commenter cannot forge state and suppress the fixer.
+            prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
+              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' |
+              sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
+            prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+            prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
+            prev_run=$(printf '%s' "$prev" | sed -n 's/.*run=\([0-9][0-9]*\).*/\1/p')
+            prev_comment=$(printf '%s' "$prev" | awk -F'\t' '{ print $2 }')
+
+            if [ "$prev_review" = "$review" ]; then
+              if [ -z "$prev_run" ] || [ "$prev_run" = "none" ]; then
+                echo "PR #$pr: review $review has no observed run; re-dispatching"
+              else
+                concl=$(gh api "repos/$REPO/actions/runs/$prev_run" --jq '.conclusion // "none"' 2>/dev/null || echo "missing")
+                case "$concl" in
+                  failure|cancelled|timed_out|startup_failure|stale|missing)
+                    echo "PR #$pr: previous run $prev_run concluded $concl; re-dispatching review $review"
+                    ;;
+                  *)
+                    echo "PR #$pr: review $review already dispatched ($concl)"
+                    continue
+                    ;;
+                esac
+              fi
+            fi
+            round=$(( ${prev_round:-0} + 1 ))
+            if [ "$round" -gt "$MAX_ROUNDS" ]; then
+              echo "PR #$pr: reached $MAX_ROUNDS rounds; leaving the rest to a human"
+              continue
+            fi
+
+            head_now=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+            if [ "$head_now" != "$head" ]; then
+              echo "PR #$pr: head moved from $head to $head_now; not dispatching (will re-evaluate)"
+              continue
+            fi
+
+            # Write a pending marker before dispatch, so the squash workflow
+            # sees an active dispatch even if the fixer pushes before we observe
+            # its run. The run id is filled in once the run appears.
+            pending="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=none head=$head -->"
+            if [ -n "$prev_comment" ]; then
+              marker_id=$prev_comment
+              gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="$pending" >/dev/null
+            else
+              marker_id=$(gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$pending" --jq '.id')
+            fi
+
+            before=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?per_page=1" --jq '.workflow_runs[0].id // 0')
+            echo "PR #$pr: dispatching fixer for review $review (round $round)"
+            aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
+            if ! gh aw run pr-fix --repo "$REPO" --raw-field "aw_context=$aw_context"; then
+              echo "Dispatch failed for PR #$pr; marker stays pending (will retry)"
+              continue
+            fi
+
+            run_id=""
+            for _ in 1 2 3 4 5 6; do
+              sleep 5
+              now=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?per_page=1" --jq '.workflow_runs[0].id // 0')
+              if [ "$now" != "$before" ]; then
+                run_id=$now
+                break
+              fi
+            done
+            if [ -z "$run_id" ]; then
+              echo "PR #$pr: dispatched run not observed; marker stays pending (will retry)"
+              continue
+            fi
+            gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head -->" >/dev/null
+
+            # One dispatch per cycle keeps run-to-PR association unambiguous.
+            break
+          done
