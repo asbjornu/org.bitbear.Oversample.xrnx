@@ -41,19 +41,11 @@ jobs:
             exit 0
           fi
 
-          # workflow_dispatch runs are not bot-gated, but if one is ever parked
-          # re-run it as this PAT owner. Only runs whose head_branch is the
-          # default branch are dispatch runs; legacy event-triggered runs are
-          # ignored so they are not replayed.
-          default_branch=$(gh api "repos/$REPO" --jq '.default_branch')
-          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=completed&per_page=100" \
-            --jq '.workflow_runs[] | select(.conclusion == "action_required") | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
-            | sort | awk -F'\t' -v b="$default_branch" '$2 == b { id = $3 } END { print id }')
-          if [ -n "$parked" ]; then
-            echo "Re-running parked fixer run $parked"
-            gh api -X POST "repos/$REPO/actions/runs/$parked/rerun" >/dev/null || echo "Re-run failed for $parked"
-            exit 0
-          fi
+          # workflow_dispatch runs are not subject to the bot-approval gate, so
+          # there is no parked-run bypass here. A workflow_dispatch run records
+          # the default branch as its head_branch and its inputs are not exposed
+          # by the API, so a parked run cannot be reliably associated with a
+          # target PR; if one ever appears it is left for a human.
 
           gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
             --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | "\(.user.login)\t\(.number)"' |

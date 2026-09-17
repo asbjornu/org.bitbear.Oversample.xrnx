@@ -49,6 +49,11 @@ jobs:
             echo "PR #$PR author is $author, not $AUTHOR; skipping"
             exit 0
           fi
+          head_repo=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name')
+          if [ "$head_repo" != "$REPO" ]; then
+            echo "PR #$PR is from a fork ($head_repo); skipping"
+            exit 0
+          fi
           head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
           fixup_authors=$(gh api --paginate "repos/$REPO/pulls/$PR/commits?per_page=100" \
             --jq '.[] | select(.commit.message | startswith("fixup!")) | (.author.login // "unknown")')
