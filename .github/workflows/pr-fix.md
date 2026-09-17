@@ -1,29 +1,8 @@
 ---
 on:
-  pull_request_review:
-    types: [submitted]
-    max-stack: -1
-  pull_request_review_comment:
-    types: [created]
   workflow_dispatch:
-  bots:
-    - Copilot
-    - copilot-pull-request-reviewer[bot]
-  roles: all
-if: >-
-  github.event_name == 'workflow_dispatch'
-  || (
-    github.event.pull_request.head.repo.id == github.event.pull_request.base.repo.id
-    && (
-      (github.event_name == 'pull_request_review'
-        && contains(fromJSON('["Copilot","copilot","copilot-pull-request-reviewer[bot]"]'), github.event.review.user.login)
-        && contains(fromJSON('["commented","COMMENTED"]'), github.event.review.state))
-      || (github.event_name == 'pull_request_review_comment'
-        && contains(fromJSON('["Copilot","copilot","copilot-pull-request-reviewer[bot]"]'), github.event.comment.user.login))
-    )
-  )
 concurrency:
-  job-discriminator: ${{ github.event.pull_request.number || github.run_id }}
+  job-discriminator: ${{ github.run_id }}
 permissions:
   contents: read
   pull-requests: read
@@ -94,11 +73,9 @@ on `gh api`, which the locked-down agent job cannot authenticate. The
 built-ins call the correct REST/GraphQL endpoints with the job token.
 
 Security notes:
-- Same-repo guard: for the review/comment triggers the `if` condition restricts
-  activation to pull requests whose head and base live in the same repository,
-  so a Copilot review on a fork PR cannot activate the agent against untrusted
-  fork code with repository secrets available. A manual `workflow_dispatch` is
-  performed by a maintainer and must carry `aw_context` naming a pull request.
+- Same-repo guard: the pre-agent `steps:` guard rejects a dispatch whose
+  `aw_context` does not name a same-repository pull request, so the agent never
+  activates against untrusted fork code with repository secrets available.
 - File allowlist: the `allowed-files` globs above limit the model to the
   project's source paths. The .github/workflows/ directory (including the
   compiled lock file) is intentionally excluded; those files are edited by
@@ -111,36 +88,23 @@ Security notes:
   are granted contents: write on the job token in addition to GH_AW_PUSH_TOKEN.
   This broader grant is required by gh-aw's safe-output push; the default
   repository token is still not used for the push itself (the PAT is).
-- Trigger: this workflow runs when Copilot posts a `commented` review, or an
-  inline review comment, on a same-repo PR. Copilot's agentic code review is
-  posted with GITHUB_TOKEN, so a `pull_request_review` event alone is
-  suppressed by GitHub's anti-recursion rule; `pull_request_review_comment`
-  still fires. The event exposes the review author as `Copilot` (the REST API
-  reports `copilot-pull-request-reviewer[bot]`), so the guard accepts either
-  spelling and both review-state casings. `roles: all` skips gh-aw's
-  membership check, which 404s on the `Copilot` bot login.
-- Full loop: three companion workflows complete the unattended cycle:
-  `copilot-review-request.yml` requests a Copilot review on PR open/ready/
-  synchronize; `pr-fix-approver.yml` re-runs any `action_required` fixer run so
-  the bot-triggered run executes without a manual click; and
-  `pr-fix-squash.yml` autosquashes the `fixup!` commits this agent creates and
-  force-pushes the branch, which re-requests the next review. The agent replies
-  on and resolves every Copilot thread ("Resolved" hides it).
-- Manual path (body-only reviews): a review whose findings are only in the
-  review body has no inline thread, so no `pull_request_review_comment` event
-  fires and the bot-suppressed review event produces no run. A maintainer can
-  dispatch this workflow to cover that case:
-
-    gh workflow run "PR Fixer (Copilot)" \
-      -f aw_context='{"item_type":"pull_request","item_number":<PR>}'
-
-  gh-aw resolves the triggering PR from `aw_context`, so the write safe outputs
-  keep their default `target: triggering` and no PR input is needed.
+- Trigger: this workflow is dispatch-only. `pr-fix-orchestrator.yml` runs on a
+  schedule, finds the newest Copilot review on each open same-repo PR's current
+  head, and dispatches this workflow with `aw_context`. That covers both inline
+  comments and body-only reviews: Copilot's agentic review is posted with
+  GITHUB_TOKEN, so its `pull_request_review` event never creates a run, and a
+  body-only review has no `pull_request_review_comment` event either. The
+  orchestrator records the dispatched review id in a hidden PR comment so each
+  review runs at most once.
+- Companion workflows: `copilot-review-request.yml` requests a Copilot review on
+  PR open/ready/synchronize, and `pr-fix-squash.yml` autosquashes the `fixup!`
+  commits this agent creates and force-pushes the branch, which re-requests the
+  next review. The agent replies on and resolves every Copilot thread.
 -->
 
-A native GitHub Copilot review or inline review comment was posted on this pull
-request, or a maintainer manually dispatched the fixer for it. Fix the
-unresolved issues Copilot raised.
+A Copilot review is ready to address on this pull request (dispatched by the
+review orchestrator, inline or body-only). Fix the unresolved issues Copilot
+raised.
 
 1. The target pull request number is the `pull-request-number` shown in the
    GitHub context. Read that PR's review threads with the GitHub MCP tool
@@ -151,8 +115,8 @@ unresolved issues Copilot raised.
    `copilot-pull-request-reviewer[bot]`. Do not re-fix threads already resolved.
    Also use `get_pull_request_reviews` to read the most recent Copilot review
    body; if it lists findings under "Suppressed comments" (which have no
-   thread), treat the concrete ones as actionable too. A manual
-   `workflow_dispatch` run exists to handle exactly those body-only findings.
+   thread), treat the concrete ones as actionable too. The orchestrator
+   dispatches this workflow for exactly those body-only reviews.
 
 2. If there are concrete, actionable issues, address each one (file:line + the
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.

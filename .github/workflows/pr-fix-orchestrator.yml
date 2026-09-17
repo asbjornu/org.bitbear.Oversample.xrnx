@@ -1,0 +1,73 @@
+name: PR Fixer Orchestrator
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch the fixer for new Copilot reviews
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          wf_id=$(gh api "repos/$REPO/actions/workflows" \
+            --jq '.workflows[] | select(.path == ".github/workflows/pr-fix.lock.yml") | .id')
+          if [ -z "$wf_id" ]; then
+            echo "pr-fix workflow not on the default branch yet; nothing to do"
+            exit 0
+          fi
+
+          inprogress=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=in_progress&per_page=1" --jq '.total_count')
+          queued=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=queued&per_page=1" --jq '.total_count')
+          if [ "${inprogress:-0}" != "0" ] || [ "${queued:-0}" != "0" ]; then
+            echo "A PR Fixer run is already pending; skipping this cycle"
+            exit 0
+          fi
+
+          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | .number' |
+          while read -r pr; do
+            if [ -z "$pr" ]; then
+              continue
+            fi
+            head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
+            review=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
+              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "Copilot" or .user.login == "copilot") | "\(.submitted_at)\t\(.commit_id)\t\(.id)"' |
+              awk -F'\t' -v h="$head" '$2 == h { id = $3 } END { print id }')
+            if [ -z "$review" ]; then
+              echo "PR #$pr: no Copilot review on the current head"
+              continue
+            fi
+
+            prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
+              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.body)"' |
+              sort | tail -n 1 || true)
+            prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+            prev_comment=$(printf '%s' "$prev" | awk -F'\t' '{ print $2 }')
+
+            if [ "$prev_review" = "$review" ]; then
+              echo "PR #$pr: review $review already dispatched"
+              continue
+            fi
+
+            echo "PR #$pr: dispatching fixer for review $review"
+            body="<!-- aw-pr-fix-state review=$review pr=$pr -->"
+            if [ -n "$prev_comment" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$prev_comment" -f body="$body" >/dev/null
+            else
+              gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$body" >/dev/null
+            fi
+            aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
+            gh workflow run pr-fix.lock.yml --repo "$REPO" -f "aw_context=$aw_context"
+          done
