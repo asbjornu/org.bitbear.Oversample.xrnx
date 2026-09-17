@@ -150,6 +150,8 @@ raised.
    that is a strict descendant of the branch merge-base (not the merge-base
    itself); if the file's last change predates the branch, create a normal
    commit so the autosquash cannot leave an unfoldable `fixup!` behind:
+     git config user.name "github-actions[bot]"
+     git config user.email "github-actions[bot]@users.noreply.github.com"
      base=""
      for ref in origin/HEAD origin/main origin/master; do
        if git rev-parse --verify -q "$ref" >/dev/null 2>&1; then

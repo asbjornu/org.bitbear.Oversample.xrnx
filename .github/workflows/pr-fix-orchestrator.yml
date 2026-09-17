@@ -55,8 +55,8 @@ jobs:
             fi
             head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
             review=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
-              --jq '.[] | select((.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") and (.state | ascii_upcase) == "COMMENTED") | "\(.submitted_at)\t\(.commit_id)\t\(.id)"' |
-              awk -F'\t' -v h="$head" '$2 == h { id = $3 } END { print id }')
+              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") | "\(.submitted_at)\t\(.commit_id)\t\(.state | ascii_upcase)\t\(.id)"' |
+              sort | awk -F'\t' -v h="$head" '$2 == h { st = $3; id = $4 } END { if (st == "COMMENTED") print id }')
             if [ -z "$review" ]; then
               echo "PR #$pr: no Copilot review on the current head"
               continue
@@ -65,7 +65,7 @@ jobs:
             # Only trust a marker written by a maintainer, so an untrusted
             # commenter cannot forge state and suppress the fixer.
             prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | startswith("<!-- aw-pr-fix-state"))) | "\(.created_at)\t\(.id)\t\(.body)"' |
+              --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER") and (.body | startswith("<!-- aw-pr-fix-state"))) | "\(.created_at)\t\(.id)\t\(.body)"' |
               sort | tail -n 1 || true)
             prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
             prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
@@ -123,7 +123,7 @@ jobs:
               continue
             fi
 
-            body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id -->"
+            body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head -->"
             if [ -n "$prev_comment" ]; then
               gh api -X PATCH "repos/$REPO/issues/comments/$prev_comment" -f body="$body" >/dev/null
             else
