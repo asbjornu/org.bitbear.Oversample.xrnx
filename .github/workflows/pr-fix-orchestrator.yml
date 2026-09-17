@@ -27,6 +27,7 @@ jobs:
           MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
         run: |
           set -euo pipefail
+          token_user=$(gh api user --jq '.login')
           wf_id=$(gh api "repos/$REPO/actions/workflows" \
             --jq '.workflows[] | select(.path == ".github/workflows/pr-fix.lock.yml") | .id')
           if [ -z "$wf_id" ]; then
@@ -66,7 +67,7 @@ jobs:
             # commenter cannot forge state and suppress the fixer.
             prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
               --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' |
-              sort | awk -F'\t' -v who="$AUTHOR" '$3 == who { out = $0 } END { if (out != "") print out }')
+              sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
             prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
             prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
             prev_run=$(printf '%s' "$prev" | sed -n 's/.*run=\([0-9][0-9]*\).*/\1/p')

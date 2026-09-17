@@ -30,11 +30,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
+          token_user=$(gh api user --jq '.login')
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
@@ -43,7 +43,7 @@ jobs:
           # pushed after an actual fixer dispatch are eligible.
           marker_head=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.user.login)\t\(.body)"' \
-            | sort | awk -F'\t' -v who="$AUTHOR" '$2 == who { out = $0 } END { if (out != "") print out }' \
+            | sort | awk -F'\t' -v who="$token_user" '$2 == who { out = $0 } END { if (out != "") print out }' \
             | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
           if [ -z "$marker_head" ] || ! git merge-base --is-ancestor "$marker_head" HEAD; then
             echo "No active fixer dispatch for this head; nothing to squash"
