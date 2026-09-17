@@ -13,7 +13,9 @@ concurrency:
 
 jobs:
   squash:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login == (vars.PR_FIX_AUTHOR || 'asbjornu')
     runs-on: ubuntu-latest
     steps:
       - name: Check for an active fixer dispatch

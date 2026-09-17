@@ -20,7 +20,10 @@ concurrency:
 
 jobs:
   request:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.user.login == (vars.PR_FIX_AUTHOR || 'asbjornu'))
     runs-on: ubuntu-latest
     steps:
       - name: Request a Copilot review for the current head
@@ -28,16 +31,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
         run: |
           set -euo pipefail
           state=$(gh api "repos/$REPO/pulls/$PR" --jq '.state')
           draft=$(gh api "repos/$REPO/pulls/$PR" --jq '.draft')
+          author=$(gh api "repos/$REPO/pulls/$PR" --jq '.user.login')
           if [ "$state" != "open" ]; then
             echo "PR #$PR is $state; skipping"
             exit 0
           fi
           if [ "$draft" = "true" ]; then
             echo "PR #$PR is a draft; skipping"
+            exit 0
+          fi
+          if [ "$author" != "$AUTHOR" ]; then
+            echo "PR #$PR author is $author, not $AUTHOR; skipping"
             exit 0
           fi
           head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')

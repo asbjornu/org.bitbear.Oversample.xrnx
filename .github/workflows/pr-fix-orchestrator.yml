@@ -23,6 +23,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           REPO: ${{ github.repository }}
+          AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
           MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
         run: |
           set -euo pipefail
@@ -55,9 +56,9 @@ jobs:
           fi
 
           gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
-            --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | .number' |
-          while read -r pr; do
-            if [ -z "$pr" ]; then
+            --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | "\(.user.login)\t\(.number)"' |
+          while read -r author pr; do
+            if [ -z "$pr" ] || [ "$author" != "$AUTHOR" ]; then
               continue
             fi
             head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')

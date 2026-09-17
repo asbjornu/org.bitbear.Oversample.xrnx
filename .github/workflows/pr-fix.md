@@ -47,6 +47,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           AW_CONTEXT: ${{ github.event.inputs.aw_context }}
+          AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
         run: |
           set -euo pipefail
           number=$(printf '%s' "$AW_CONTEXT" | jq -r '.item_number // empty')
@@ -56,6 +57,11 @@ jobs:
           fi
           head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.head.repo.full_name // empty')
           if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr_author=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.user.login // empty')
+          if [ "$pr_author" != "$AUTHOR" ]; then
             echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
