@@ -16,7 +16,20 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
+      - name: Check for an active fixer dispatch
+        id: fixer
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          n=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '[.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | startswith("<!-- aw-pr-fix-state")))] | length')
+          echo "dispatched=$n" >> "$GITHUB_OUTPUT"
+
       - name: Check out the pull request branch
+        if: steps.fixer.outputs.dispatched != '0'
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
@@ -24,6 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Autosquash fixup! commits and force-push
+        if: steps.fixer.outputs.dispatched != '0'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
