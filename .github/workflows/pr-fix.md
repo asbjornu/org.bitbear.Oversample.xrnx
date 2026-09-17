@@ -127,8 +127,9 @@ raised.
    `get_pull_request_review_comments`. It returns each review thread's GraphQL
    `id` (a `PRRT_...` value), its `is_resolved` flag, and its comments (body,
    path, line, author, html_url). Work only on unresolved, non-outdated threads
-   whose comments are authored by `Copilot` or
-   `copilot-pull-request-reviewer[bot]`. Do not re-fix threads already resolved.
+   whose comments are authored by `Copilot`, `copilot`,
+   `copilot-pull-request-reviewer`, or `copilot-pull-request-reviewer[bot]`. Do
+   not re-fix threads that are already resolved.
    Also use `get_pull_request_reviews` to read the most recent Copilot review
    body; if it lists findings under "Suppressed comments" (which have no
    thread), treat the concrete ones as actionable too. The orchestrator

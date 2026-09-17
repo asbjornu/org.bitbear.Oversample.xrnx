@@ -46,8 +46,8 @@ jobs:
           # default branch are dispatch runs; legacy event-triggered runs are
           # ignored so they are not replayed.
           default_branch=$(gh api "repos/$REPO" --jq '.default_branch')
-          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=action_required&per_page=100" \
-            --jq '.workflow_runs[] | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
+          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | select(.conclusion == "action_required") | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
             | sort | awk -F'\t' -v b="$default_branch" '$2 == b { id = $3 } END { print id }')
           if [ -n "$parked" ]; then
             echo "Re-running parked fixer run $parked"
@@ -63,7 +63,7 @@ jobs:
             fi
             head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
             review=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
-              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "Copilot" or .user.login == "copilot") | "\(.submitted_at)\t\(.commit_id)\t\(.id)"' |
+              --jq '.[] | select((.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") and (.state | ascii_upcase) == "COMMENTED") | "\(.submitted_at)\t\(.commit_id)\t\(.id)"' |
               awk -F'\t' -v h="$head" '$2 == h { id = $3 } END { print id }')
             if [ -z "$review" ]; then
               echo "PR #$pr: no Copilot review on the current head"
@@ -77,11 +77,23 @@ jobs:
               sort | tail -n 1 || true)
             prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
             prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
+            prev_run=$(printf '%s' "$prev" | sed -n 's/.*run=\([0-9][0-9]*\).*/\1/p')
             prev_comment=$(printf '%s' "$prev" | awk -F'\t' '{ print $2 }')
 
             if [ "$prev_review" = "$review" ]; then
-              echo "PR #$pr: review $review already dispatched"
-              continue
+              concl="none"
+              if [ -n "$prev_run" ]; then
+                concl=$(gh api "repos/$REPO/actions/runs/$prev_run" --jq '.conclusion // "none"' 2>/dev/null || echo "missing")
+              fi
+              case "$concl" in
+                failure|cancelled|timed_out|startup_failure|stale|missing)
+                  echo "PR #$pr: previous run $prev_run concluded $concl; re-dispatching review $review"
+                  ;;
+                *)
+                  echo "PR #$pr: review $review already dispatched ($concl)"
+                  continue
+                  ;;
+              esac
             fi
             round=$(( ${prev_round:-0} + 1 ))
             if [ "$round" -gt "$MAX_ROUNDS" ]; then
