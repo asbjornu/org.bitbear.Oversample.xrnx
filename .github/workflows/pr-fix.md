@@ -115,7 +115,7 @@ Security notes:
 - Companion workflows: `copilot-review-request.yml` requests a Copilot review on
   PR open/ready/synchronize, and `pr-fix-squash.yml` autosquashes the `fixup!`
   commits this agent creates and force-pushes the branch, which re-requests the
-  next review. The agent replies on and resolves every Copilot thread.
+  next review. The agent replies on and resolves the Copilot threads it fixed.
 -->
 
 A Copilot review is ready to address on this pull request (dispatched by the
@@ -183,11 +183,10 @@ raised.
    - Then call the `add_comment` safe-output tool once with a short summary of
      how the review's complaints were addressed overall.
 
-5. Resolve every unresolved Copilot review thread on this PR so it is hidden as
-   "Resolved": call the `resolve_pull_request_review_thread` safe-output tool
-   with `thread_id` set to each thread's `PRRT_...` `id` from step 1. Do this
-   for threads you fixed and for those you judged not actionable (after
-   replying as in step 4). Never resolve non-Copilot threads.
+5. Resolve only the Copilot threads you actually fixed: for each such thread
+   call the `resolve_pull_request_review_thread` safe-output tool with its
+   `PRRT_...` `id` from step 1. Do not resolve a thread you did not change
+   (leave it open for a human), and never resolve non-Copilot threads.
 
 6. If and only if you committed a fix, push it to the target pull request's
    branch by calling the `push_to_pull_request_branch` safe output. If you made
