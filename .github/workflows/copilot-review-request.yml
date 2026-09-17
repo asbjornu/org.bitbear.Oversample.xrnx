@@ -41,14 +41,14 @@ jobs:
             exit 0
           fi
           head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
-          fixups=$(gh api "repos/$REPO/pulls/$PR/commits?per_page=100" \
-            --jq '[.[] | select(.commit.message | startswith("fixup!"))] | length')
+          fixups=$(gh api --paginate "repos/$REPO/pulls/$PR/commits?per_page=100" \
+            --jq '.[].commit.message | split("\n")[0]' | grep -c '^fixup!' || true)
           if [ "$fixups" != "0" ]; then
             echo "Head has pending fixup! commits; the squash workflow will re-request"
             exit 0
           fi
-          reviewed=$(gh api "repos/$REPO/pulls/$PR/reviews" \
-            --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id' \
+          reviewed=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" \
+            --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "Copilot" or .user.login == "copilot") | .commit_id' \
             | grep -c "^${head}$" || true)
           if [ "$reviewed" != "0" ]; then
             echo "Head $head already has a Copilot review; skipping"

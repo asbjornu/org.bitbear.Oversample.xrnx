@@ -23,7 +23,7 @@ if: >-
     )
   )
 concurrency:
-  job-discriminator: ${{ github.run_id }}
+  job-discriminator: ${{ github.event.pull_request.number || github.run_id }}
 permissions:
   contents: read
   pull-requests: read
@@ -55,6 +55,26 @@ safe-outputs:
     github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
   add-comment:
     max: 1
+steps:
+  - name: Guard manual dispatch to same-repo PRs
+    if: github.event_name == 'workflow_dispatch'
+    env:
+      GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+      AW_CONTEXT: ${{ github.event.inputs.aw_context }}
+    run: |
+      set -euo pipefail
+      outputs="${RUNNER_TEMP}/gh-aw/safeoutputs/outputs.jsonl"
+      mkdir -p "$(dirname "$outputs")"
+      number=$(printf '%s' "$AW_CONTEXT" | jq -r '.item_number // empty')
+      if [ -z "$number" ]; then
+        echo '{"type":"noop","message":"manual dispatch without a pull_request aw_context"}' >> "$outputs"
+        exit 0
+      fi
+      head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.head.repo.full_name // empty')
+      if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+        echo '{"type":"noop","message":"manual dispatch targets a non-same-repo pull request"}' >> "$outputs"
+        exit 0
+      fi
 ---
 
 # PR Fixer (Copilot)
@@ -171,8 +191,9 @@ unresolved issues Copilot raised.
    for threads you fixed and for those you judged not actionable (after
    replying as in step 4). Never resolve non-Copilot threads.
 
-6. Push the committed fix to the target pull request's branch by calling the
-   `push_to_pull_request_branch` safe output.
+6. If and only if you committed a fix, push it to the target pull request's
+   branch by calling the `push_to_pull_request_branch` safe output. If you made
+   no changes, do NOT push; call the `noop` safe output with a short reason.
 
 If the repository's automatic Copilot code review is enabled, your push
 triggers a fresh review; otherwise a maintainer re-requests it. The loop ends

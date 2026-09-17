@@ -25,13 +25,9 @@ jobs:
             echo "pr-fix workflow not found; nothing to do"
             exit 0
           fi
-          ids=$(gh api "repos/$REPO/actions/workflows/$wf/runs?per_page=100" \
-            --jq '.workflow_runs
-              | sort_by(.created_at)
-              | group_by(.head_branch)
-              | map(.[-1])
-              | map(select(.head_branch != null and .conclusion == "action_required"))
-              | .[].id')
+          ids=$(gh api --paginate "repos/$REPO/actions/workflows/$wf/runs?status=action_required&per_page=100" \
+            --jq '.workflow_runs[] | select(.head_branch != null) | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
+            | sort | awk -F'\t' '{latest[$2] = $3} END {for (b in latest) print latest[b]}')
           if [ -z "$ids" ]; then
             echo "No parked PR Fixer runs"
             exit 0
