@@ -34,26 +34,35 @@ safe-outputs:
     github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
   add-comment:
     max: 1
-steps:
-  - name: Guard manual dispatch to same-repo PRs
-    if: github.event_name == 'workflow_dispatch'
-    env:
-      GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
-      AW_CONTEXT: ${{ github.event.inputs.aw_context }}
-    run: |
-      set -euo pipefail
-      outputs="${RUNNER_TEMP}/gh-aw/safeoutputs/outputs.jsonl"
-      mkdir -p "$(dirname "$outputs")"
-      number=$(printf '%s' "$AW_CONTEXT" | jq -r '.item_number // empty')
-      if [ -z "$number" ]; then
-        echo '{"type":"noop","message":"manual dispatch without a pull_request aw_context"}' >> "$outputs"
-        exit 0
-      fi
-      head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.head.repo.full_name // empty')
-      if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-        echo '{"type":"noop","message":"manual dispatch targets a non-same-repo pull request"}' >> "$outputs"
-        exit 0
-      fi
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          AW_CONTEXT: ${{ github.event.inputs.aw_context }}
+        run: |
+          set -euo pipefail
+          number=$(printf '%s' "$AW_CONTEXT" | jq -r '.item_number // empty')
+          if [ -z "$number" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head_repo=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.head.repo.full_name // empty')
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+  agent:
+    needs: [guard]
+    if: needs.guard.outputs.ok == 'true'
 ---
 
 # PR Fixer (Copilot)
@@ -122,12 +131,19 @@ raised.
    fix). Stay within the `allowed-files` paths. Do not make unrelated changes.
    Keep edits minimal and aligned with the existing code style. Stage the
    changes and create a `fixup!` commit per changed file targeting the commit
-   that last touched it, so the branch history stays clean:
+   that last touched it, so the branch history stays clean. Only target a commit
+   that is part of this pull request (a descendant of the branch merge-base); if
+   the file's last change predates the branch, create a normal commit so the
+   autosquash cannot leave an unfoldable `fixup!` behind:
+     base=$(git merge-base HEAD origin/HEAD 2>/dev/null || true)
      git add -A
      for f in $(git diff --cached --name-only); do
        sha=$(git log -1 --format=%H -- "$f" || true)
-       if [ -n "$sha" ]; then git commit --fixup="$sha" -- "$f"; \
-       else git commit -m "fix: address Copilot review ($f)"; fi
+       if [ -n "$base" ] && [ -n "$sha" ] && git merge-base --is-ancestor "$base" "$sha"; then
+         git commit --fixup="$sha" -- "$f"
+       else
+         git commit -m "fix: address Copilot review ($f)"
+       fi
      done
    A follow-up workflow autosquashes these fixups and force-pushes. Do not run
    `git push` or force-push yourself; transport the commits with the safe

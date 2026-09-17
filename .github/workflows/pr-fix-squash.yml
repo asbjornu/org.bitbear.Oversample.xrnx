@@ -36,10 +36,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
-          if git log --merges "$base"..HEAD --format=%H | grep -q .; then
-            echo "Branch contains merge commits; refusing to autosquash"
-            exit 0
-          fi
-          GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash "$base"
+          GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash --rebase-merges "$base"
           git push --force-with-lease origin "HEAD:$HEAD_REF"
           echo "Squashed and force-pushed $HEAD_REF"

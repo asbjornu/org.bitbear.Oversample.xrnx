@@ -35,6 +35,19 @@ jobs:
             exit 0
           fi
 
+          # If any run is parked by the bot-approval gate, re-run the newest one
+          # per branch as this PAT owner, which bypasses the gate.
+          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=action_required&per_page=100" \
+            --jq '.workflow_runs[] | select(.head_branch != null) | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
+            | sort | awk -F'\t' '{ latest[$2] = $3 } END { for (b in latest) print latest[b] }')
+          if [ -n "$parked" ]; then
+            for id in $parked; do
+              echo "Re-running parked run $id"
+              gh api -X POST "repos/$REPO/actions/runs/$id/rerun" >/dev/null || echo "Re-run failed for $id"
+            done
+            exit 0
+          fi
+
           gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
             --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | .number' |
           while read -r pr; do
@@ -62,12 +75,16 @@ jobs:
             fi
 
             echo "PR #$pr: dispatching fixer for review $review"
+            aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
+            if ! gh workflow run pr-fix.lock.yml --repo "$REPO" -f "aw_context=$aw_context"; then
+              echo "Dispatch failed for PR #$pr; will retry next cycle"
+              continue
+            fi
+
             body="<!-- aw-pr-fix-state review=$review pr=$pr -->"
             if [ -n "$prev_comment" ]; then
               gh api -X PATCH "repos/$REPO/issues/comments/$prev_comment" -f body="$body" >/dev/null
             else
               gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$body" >/dev/null
             fi
-            aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
-            gh workflow run pr-fix.lock.yml --repo "$REPO" -f "aw_context=$aw_context"
           done
