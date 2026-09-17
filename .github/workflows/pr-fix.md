@@ -132,14 +132,20 @@ raised.
    Keep edits minimal and aligned with the existing code style. Stage the
    changes and create a `fixup!` commit per changed file targeting the commit
    that last touched it, so the branch history stays clean. Only target a commit
-   that is part of this pull request (a descendant of the branch merge-base); if
-   the file's last change predates the branch, create a normal commit so the
-   autosquash cannot leave an unfoldable `fixup!` behind:
-     base=$(git merge-base HEAD origin/HEAD 2>/dev/null || true)
+   that is a strict descendant of the branch merge-base (not the merge-base
+   itself); if the file's last change predates the branch, create a normal
+   commit so the autosquash cannot leave an unfoldable `fixup!` behind:
+     base=""
+     for ref in origin/HEAD origin/main origin/master; do
+       if git rev-parse --verify -q "$ref" >/dev/null 2>&1; then
+         base=$(git merge-base HEAD "$ref" 2>/dev/null || true)
+         [ -n "$base" ] && break
+       fi
+     done
      git add -A
      for f in $(git diff --cached --name-only); do
        sha=$(git log -1 --format=%H -- "$f" || true)
-       if [ -n "$base" ] && [ -n "$sha" ] && git merge-base --is-ancestor "$base" "$sha"; then
+       if [ -n "$base" ] && [ -n "$sha" ] && [ "$sha" != "$base" ] && git merge-base --is-ancestor "$base" "$sha"; then
          git commit --fixup="$sha" -- "$f"
        else
          git commit -m "fix: address Copilot review ($f)"

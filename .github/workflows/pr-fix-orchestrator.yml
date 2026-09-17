@@ -19,6 +19,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           REPO: ${{ github.repository }}
+          MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
         run: |
           set -euo pipefail
           wf_id=$(gh api "repos/$REPO/actions/workflows" \
@@ -32,19 +33,6 @@ jobs:
           queued=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=queued&per_page=1" --jq '.total_count')
           if [ "${inprogress:-0}" != "0" ] || [ "${queued:-0}" != "0" ]; then
             echo "A PR Fixer run is already pending; skipping this cycle"
-            exit 0
-          fi
-
-          # If any run is parked by the bot-approval gate, re-run the newest one
-          # per branch as this PAT owner, which bypasses the gate.
-          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=action_required&per_page=100" \
-            --jq '.workflow_runs[] | select(.head_branch != null) | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
-            | sort | awk -F'\t' '{ latest[$2] = $3 } END { for (b in latest) print latest[b] }')
-          if [ -n "$parked" ]; then
-            for id in $parked; do
-              echo "Re-running parked run $id"
-              gh api -X POST "repos/$REPO/actions/runs/$id/rerun" >/dev/null || echo "Re-run failed for $id"
-            done
             exit 0
           fi
 
@@ -63,28 +51,56 @@ jobs:
               continue
             fi
 
+            # Only trust a marker written by a maintainer, so an untrusted
+            # commenter cannot forge state and suppress the fixer.
             prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.body)"' |
+              --jq '.[] | select((.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") and (.body | startswith("<!-- aw-pr-fix-state"))) | "\(.created_at)\t\(.id)\t\(.body)"' |
               sort | tail -n 1 || true)
             prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+            prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
             prev_comment=$(printf '%s' "$prev" | awk -F'\t' '{ print $2 }')
 
             if [ "$prev_review" = "$review" ]; then
               echo "PR #$pr: review $review already dispatched"
               continue
             fi
+            round=$(( ${prev_round:-0} + 1 ))
+            if [ "$round" -gt "$MAX_ROUNDS" ]; then
+              echo "PR #$pr: reached $MAX_ROUNDS rounds; leaving the rest to a human"
+              continue
+            fi
 
-            echo "PR #$pr: dispatching fixer for review $review"
+            before=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?per_page=1" --jq '.workflow_runs[0].id // 0')
+            echo "PR #$pr: dispatching fixer for review $review (round $round)"
             aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
             if ! gh workflow run pr-fix.lock.yml --repo "$REPO" -f "aw_context=$aw_context"; then
               echo "Dispatch failed for PR #$pr; will retry next cycle"
               continue
             fi
 
-            body="<!-- aw-pr-fix-state review=$review pr=$pr -->"
+            # Record the marker only once the dispatched run actually appears,
+            # so a dispatch that never starts is retried next cycle.
+            run_id=""
+            for _ in 1 2 3 4 5 6; do
+              sleep 5
+              now=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?per_page=1" --jq '.workflow_runs[0].id // 0')
+              if [ "$now" != "$before" ]; then
+                run_id=$now
+                break
+              fi
+            done
+            if [ -z "$run_id" ]; then
+              echo "PR #$pr: dispatched run not observed yet; not marking (will retry)"
+              continue
+            fi
+
+            body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id -->"
             if [ -n "$prev_comment" ]; then
               gh api -X PATCH "repos/$REPO/issues/comments/$prev_comment" -f body="$body" >/dev/null
             else
               gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$body" >/dev/null
             fi
+
+            # One dispatch per cycle keeps run-to-PR association unambiguous.
+            break
           done

@@ -29,13 +29,13 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          if ! git log --format=%s -n 50 | grep -q '^fixup! '; then
-            echo "No fixup! commits on this branch; nothing to squash"
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
+          if ! git log "$base"..HEAD --format=%s | grep -q '^fixup! '; then
+            echo "No fixup! commits on this branch; nothing to squash"
+            exit 0
+          fi
           GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash --rebase-merges "$base"
           git push --force-with-lease origin "HEAD:$HEAD_REF"
           echo "Squashed and force-pushed $HEAD_REF"
