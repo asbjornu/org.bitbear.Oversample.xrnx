@@ -28,9 +28,9 @@ safe-outputs:
       - "*.lua"
       - "LICENSE"
   reply-to-pull-request-review-comment:
-    max: 20
+    max: 100
   resolve-pull-request-review-thread:
-    max: 20
+    max: 100
     github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
   add-comment:
     max: 1

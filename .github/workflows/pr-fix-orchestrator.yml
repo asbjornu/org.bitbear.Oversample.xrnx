@@ -11,6 +11,10 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: pr-fix-orchestrator
+  cancel-in-progress: false
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest
@@ -33,6 +37,20 @@ jobs:
           queued=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=queued&per_page=1" --jq '.total_count')
           if [ "${inprogress:-0}" != "0" ] || [ "${queued:-0}" != "0" ]; then
             echo "A PR Fixer run is already pending; skipping this cycle"
+            exit 0
+          fi
+
+          # workflow_dispatch runs are not bot-gated, but if one is ever parked
+          # re-run it as this PAT owner. Only runs whose head_branch is the
+          # default branch are dispatch runs; legacy event-triggered runs are
+          # ignored so they are not replayed.
+          default_branch=$(gh api "repos/$REPO" --jq '.default_branch')
+          parked=$(gh api --paginate "repos/$REPO/actions/workflows/$wf_id/runs?status=action_required&per_page=100" \
+            --jq '.workflow_runs[] | "\(.created_at)\t\(.head_branch)\t\(.id)"' \
+            | sort | awk -F'\t' -v b="$default_branch" '$2 == b { id = $3 } END { print id }')
+          if [ -n "$parked" ]; then
+            echo "Re-running parked fixer run $parked"
+            gh api -X POST "repos/$REPO/actions/runs/$parked/rerun" >/dev/null || echo "Re-run failed for $parked"
             exit 0
           fi
 
