@@ -34,6 +34,7 @@ jobs:
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
         run: |
           set -euo pipefail
+          token_user=$(gh api user --jq '.login')
           state=$(gh api "repos/$REPO/pulls/$PR" --jq '.state')
           draft=$(gh api "repos/$REPO/pulls/$PR" --jq '.draft')
           author=$(gh api "repos/$REPO/pulls/$PR" --jq '.user.login')
@@ -58,8 +59,19 @@ jobs:
           fixup_authors=$(gh api --paginate "repos/$REPO/pulls/$PR/commits?per_page=100" \
             --jq '.[] | select(.commit.message | startswith("fixup!")) | (.author.login // "unknown")')
           if [ -n "$fixup_authors" ] && ! printf '%s\n' "$fixup_authors" | grep -qv '^github-actions\[bot\]$'; then
-            echo "Head has only fixer fixup! commits; the squash workflow will re-request"
-            exit 0
+            marker_head=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.user.login)\t\(.body)"' \
+              | sort | awk -F'\t' -v who="$token_user" '$2 == who { out = $0 } END { if (out != "") print out }' \
+              | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
+            status="diverged"
+            if [ -n "$marker_head" ]; then
+              status=$(gh api "repos/$REPO/compare/$marker_head...$head" --jq '.status' 2>/dev/null || echo "diverged")
+            fi
+            if [ "$status" = "ahead" ] || [ "$status" = "identical" ]; then
+              echo "Head has only fixer fixup! commits under an active dispatch; the squash workflow will re-request"
+              exit 0
+            fi
+            echo "Fixer fixup! commits present but no active dispatch; requesting a review"
           fi
           reviewed=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" \
             --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") | .commit_id' \
