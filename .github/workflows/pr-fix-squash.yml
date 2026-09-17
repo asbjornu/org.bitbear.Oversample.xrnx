@@ -1,0 +1,41 @@
+name: PR Fixer Squash
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixer-squash-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  squash:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          fetch-depth: 0
+
+      - name: Autosquash fixup! commits and force-push
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          if ! git log --format=%s -n 50 | grep -q '^fixup! '; then
+            echo "No fixup! commits on this branch; nothing to squash"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          base=$(git merge-base "origin/$BASE_REF" HEAD)
+          GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: git rebase -i --autosquash "$base"
+          git push --force-with-lease origin "HEAD:$HEAD_REF"
+          echo "Squashed and force-pushed $HEAD_REF"
