@@ -7,10 +7,40 @@ permissions:
   contents: read
   pull-requests: read
   copilot-requests: write
-engine: copilot
+# The agent runs the OpenCode CLI against OpenCode Zen, billed privately to
+# the repository owner via the `OPENAI_API_KEY` repository secret. The secret
+# name is NOT OpenAI's: gh-aw's universal-llm-consumer engine mode hard-maps
+# the OpenAI-compatible provider route to `secrets.OPENAI_API_KEY` (falling
+# back to `secrets.CODEX_API_KEY`) and `engine.provider.auth.secret` cannot
+# rename it. The key is held by the AWF api-proxy sidecar and is excluded from
+# the agent container.
+engine:
+  id: opencode
+  version: "1.2.14"
+  env:
+    OPENAI_BASE_URL: "https://opencode.ai/zen/v1"
+imports:
+  - shared/opencode.md
+model: openai/deepseek-v4.1-flash
+models:
+  # OpenCode Zen list price for deepseek-v4.1-flash, so the proxy can meter the
+  # run instead of failing with unknown_model_ai_credits.
+  default-ai-credits-pricing:
+    input: 0.30
+    output: 1.20
+excluded-env:
+  - COPILOT_GITHUB_TOKEN
+  - GITHUB_TOKEN
+  - OPENAI_API_KEY
 network:
   allowed:
     - defaults
+    - opencode.ai
+    # Explicit FQDN (not just the `copilot` set) so it is carried into the
+    # built-in threat-detection job's own AWF config, which only receives the
+    # workflow's literal domains. Detection runs on the Copilot route and
+    # cannot be repointed; the agent itself targets opencode.ai.
+    - api.githubcopilot.com
     - copilot
 safe-outputs:
   push-to-pull-request-branch:
@@ -25,8 +55,6 @@ safe-outputs:
       - "**.txt"
       - "**.cfg"
       - "**.json"
-      - "*.md"
-      - "*.lua"
       - "LICENSE"
   reply-to-pull-request-review-comment:
     max: 100
@@ -76,7 +104,7 @@ jobs:
     if: needs.guard.outputs.ok == 'true'
 ---
 
-# PR Fixer (Copilot)
+# PR Fixer (OpenCode)
 
 <!--
 Push auth: the push_to_pull_request_branch safe output pushes with the
@@ -93,6 +121,28 @@ on `gh api`, which the locked-down agent job cannot authenticate. The
 built-ins call the correct REST/GraphQL endpoints with the job token.
 
 Security notes:
+- Engine: the fixer runs on the OpenCode CLI (`shared/opencode.md`). The engine
+  provider is `openai`, so gh-aw routes through the AWF api-proxy's OpenAI
+  target, which `engine.env.OPENAI_BASE_URL` points at OpenCode Zen
+  (`https://opencode.ai/zen/v1`), serving `deepseek-v4.1-flash`. The Zen key is
+  the `OPENAI_API_KEY` repository secret: a source credential held by the
+  api-proxy sidecar and listed in `excluded-env`, so it is never present in the
+  agent container. The shared definition disables OpenCode's built-in
+  `opencode`, `openai`, and `copilot` providers, so the only selectable
+  provider is the local proxy. The runtime harness (`harness-script`) resolves
+  the endpoint and an advertised model id from the proxy's `/reflect` before
+  spawning the CLI. `opencode.ai` is allowed for the proxy's upstream, and
+  `api.githubcopilot.com` is also allowed because the built-in threat-detection
+  pass below still runs on the Copilot route; the agent itself does not use it.
+- Threat detection: gh-aw runs a built-in post-agent Copilot threat-detection
+  pass on every workflow; its engine cannot be changed from frontmatter. It is
+  small and bounded by `GH_AW_DEFAULT_DETECTION_MAX_AI_CREDITS`.
+- MCP bearer: the config adapter writes the gateway's MCP `headers` (including
+  its bearer token) into `opencode.jsonc` in the workspace, which is mounted
+  into the agent container. Mode 0600 does not hide it from the agent, which
+  runs as the same user; gh-aw has no out-of-workspace config mount for the
+  OpenCode engine (the upstream Goose adapter has the same property). The token
+  only unlocks the gateway, which enforces the same tool guard policies.
 - Same-repo guard: the pre-agent `steps:` guard rejects a dispatch whose
   `aw_context` does not name a same-repository pull request, so the agent never
   activates against untrusted fork code with repository secrets available.
@@ -102,6 +152,12 @@ Security notes:
   the engineer and recompiled, not by the fixer. Targeting .github/workflows/
   paths in allowed-files would require a GitHub App token with workflows:
   write, which is not configured here.
+- Repository instructions: `*.md` is deliberately NOT in `allowed-files`, so
+  the fixer cannot push changes to `AGENTS.md` (or any other instructions
+  file) even though the OpenCode engine's agent-side safe-outputs config does
+  not list `AGENTS.md` in `protected_files`. The compiled Copilot engine added
+  it there; the OpenCode engine's `behaviors.manifest` files are only enforced
+  by the handler config. Keep the allowlist as the primary agent-side guard.
 - Agent read access: `contents: read` is granted so the agent job's
   actions/checkout can fetch the PR head it needs to inspect and edit.
 - Effective token grants: gh-aw's compiled safe_outputs and conclusion jobs
@@ -124,7 +180,7 @@ Security notes:
 
 A Copilot review is ready to address on this pull request (dispatched by the
 review orchestrator, inline or body-only). Fix the unresolved issues Copilot
-raised.
+raised, using the OpenCode CLI.
 
 1. The target pull request number is the `pull-request-number` shown in the
    GitHub context. Read that PR's review threads with the GitHub MCP tool
