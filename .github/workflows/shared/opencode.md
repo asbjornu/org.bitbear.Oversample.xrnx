@@ -115,7 +115,6 @@ engine:
       const {
         fetchAWFReflect,
         resolveProviderEndpointFromReflect,
-        deriveBaseUrlFromModelsURL,
         waitForProviderListenerReady,
       } = require("./awf_reflect.cjs");
 
@@ -177,13 +176,20 @@ engine:
           if (!endpoint || !endpoint.baseUrl) {
             throw new Error(`No configured /reflect endpoint found for provider ${provider}`);
           }
+          // endpoint.baseUrl is the proxy ORIGIN (e.g. http://api-proxy:10000),
+          // already normalized by resolveProviderEndpointFromReflect via
+          // endpointBaseUrl (which also applies the AWF HOSTALIASES bridge
+          // rewrite). Do NOT re-derive it from the raw reflected models_url:
+          // that would drop the bridge rewrite and reintroduce the /v1 prefix.
+          // AWF prePENDS its --openai-api-base-path to the client path, so with
+          // baseURL .../v1 the client posts /v1/chat/completions and AWF
+          // produces /zen/v1/v1/chat/completions upstream (a 404). With the
+          // origin the client posts /chat/completions and AWF yields the
+          // intended https://opencode.ai/zen/v1/chat/completions.
           baseURL = endpoint.baseUrl;
           const reflectedEndpoint = result.reflectData.endpoints?.find(
             entry => entry?.configured === true && entry.provider === endpoint.endpointProvider
           );
-          if (typeof reflectedEndpoint?.models_url === "string") {
-            baseURL = deriveBaseUrlFromModelsURL(reflectedEndpoint.models_url);
-          }
           // Prefer an advertised model id over the requested one when the proxy
           // exposes a catalog: a model the proxy cannot price is exactly what
           // triggers unknown_model_ai_credits.
