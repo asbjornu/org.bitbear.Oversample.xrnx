@@ -91,6 +91,12 @@ engine:
       provider-env-mode: universal-llm-consumer
       env:
         XDG_DATA_HOME: /tmp/opencode-data
+        # OpenCode installs its built-in auth plugins (e.g.
+        # opencode-anthropic-auth) at startup with an unbounded `bun add`,
+        # which would hang here because registry.npmjs.org is not in the
+        # firewall allowlist. This workflow uses a config-level API key, so the
+        # default plugins are not needed.
+        OPENCODE_DISABLE_DEFAULT_PLUGINS: "1"
     harness-script: |
       // @ts-check
       // Runtime harness for the OpenCode CLI on a behaviour-defined engine.
@@ -224,8 +230,13 @@ engine:
         const prompt = readFileSync(promptPath, "utf8");
         const env = { ...process.env, OPENCODE_MODEL: `awf-proxy/${resolvedModel}` };
         log(`configured provider=${provider} baseURL=${baseURL} model=${resolvedModel}`);
+        // Close the child's stdin. The prompt is already passed as an argument,
+        // but OpenCode v1.2.14 still does `await Bun.stdin.text()` for
+        // non-TTY stdin before bootstrap; with an inherited open pipe that
+        // never reaches EOF it blocks forever with no output (upstream bug,
+        // opencode#38723). `ignore` maps stdin to /dev/null.
         fail(
-          spawnSync(command, [...commandArgs, prompt], { cwd: workspace, env, stdio: "inherit" }),
+          spawnSync(command, [...commandArgs, prompt], { cwd: workspace, env, stdio: ["ignore", "inherit", "inherit"] }),
           "OpenCode execution"
         );
       };
