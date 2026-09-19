@@ -16,6 +16,28 @@ remains available even when High Quality is Off.
 
 ## Repo layout
 
+- **Worktree invariant (enforced):** the only branch that may be checked out
+  in `~/Dev/org.bitbear.Oversample.xrnx` is **`main`**. This directory is the
+  `main` worktree; never `git switch`/`git checkout` another branch in it, and
+  never commit new work onto `main` there. Every other branch — feature,
+  fix, or docs — must be created in its **own separate worktree** with
+  `git worktree add <path> <branch>` (or `git worktree add -b <branch>
+  <path> <start-point>`) before any edit, commit, or push.
+- **Do not use `git branch <name>` plus `git switch` as a shortcut.** That
+  creates the branch *in the `main` worktree*, which violates the invariant
+  above. The check is: `git worktree list` must show exactly one worktree for
+  each checked-out branch, and `~/Dev/org.bitbear.Oversample.xrnx` must be on
+  `main` at all times.
+- **Before editing anything:** run `git worktree list` and
+  `git status --short --branch` in the directory you intend to edit. If the
+  current directory is `~/Dev/org.bitbear.Oversample.xrnx` and the branch is
+  not `main`, first move that work back onto `main` (`git switch main`) and
+  redo it in a dedicated worktree. If a target branch has no worktree yet,
+  create one before editing.
+- If you accidentally commit on the wrong branch or in the wrong worktree,
+  stop and tell the user, then move the work to a proper worktree (e.g.
+  `git branch <name> <sha> && git reset --hard <original>`, followed by
+  `git worktree add <path> <name>`) rather than continuing.
 - `main` worktree: `~/Dev/org.bitbear.Oversample.xrnx`. A session may start
   here, but this is **not the installed tool**. Its implementation differs
   from the deployed branch.
@@ -67,6 +89,11 @@ remains available even when High Quality is Off.
   at 70 characters per line.
 - Do not merge, deploy, or leave duplicate edits in other worktrees unless
   requested.
+- **Never commit on `main`.** `main` only ever points at `origin/main`; work
+  belongs on a branch in its own worktree (see the worktree invariant above).
+  Before every `git commit`, re-run `git status --short --branch` and confirm
+  the branch is not `main`. The only exception is this file, `AGENTS.md`,
+  which is maintained on `main` in the `main` worktree.
 
 ## Renoise ViewBuilder layout rules
 
