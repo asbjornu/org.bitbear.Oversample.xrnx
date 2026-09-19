@@ -2,6 +2,9 @@ name: PR Fixer Orchestrator
 
 on:
   schedule:
+    # Every 5 minutes: GitHub Actions' minimum practical schedule granularity.
+    # The schedule is best-effort and can be delayed under load, so finer
+    # intervals would not reliably run more often.
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
@@ -37,6 +40,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           GH_AW_DISPATCH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
           MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
         run: |
@@ -154,6 +158,13 @@ jobs:
               continue
             fi
             gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head -->" >/dev/null
+
+            # Visible heads-up so watchers know the fixer picked up this review.
+            # Link via the server URL so this also works on GitHub Enterprise.
+            run_url="$SERVER_URL/$REPO/actions/runs/$run_id"
+            review_url="$SERVER_URL/$REPO/pull/$pr#pullrequestreview-$review"
+            gh api -X POST "repos/$REPO/issues/$pr/comments" \
+              -f body="🤖 PR Fixer noticed Copilot review [\`$review\`]($review_url) (round $round) — [commencing work]($run_url)." >/dev/null || true
 
             # One dispatch per cycle keeps run-to-PR association unambiguous.
             break
