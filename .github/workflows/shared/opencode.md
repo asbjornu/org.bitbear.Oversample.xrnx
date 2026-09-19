@@ -279,8 +279,26 @@ engine:
         const rawServers = gatewayOutput.mcpServers;
         const servers = rawServers && typeof rawServers === "object" && !Array.isArray(rawServers) ? rawServers : {};
 
+        // OpenCode runs inside the AWF agent container, but the gateway's
+        // rendered URLs use the host-side domain (localhost / 127.0.0.1).
+        // Rewrite the host to MCP_GATEWAY_DOMAIN (awmg-mcpg), which is how the
+        // container reaches the gateway; without this the MCP clients fail with
+        // "Unable to connect".
+        const gatewayDomain = (process.env.MCP_GATEWAY_DOMAIN || "").trim();
+        const rewriteGatewayUrl = value => {
+          if (typeof value !== "string" || !value || !gatewayDomain) return value;
+          try {
+            const parsed = new URL(value);
+            parsed.hostname = gatewayDomain;
+            return parsed.toString();
+          } catch {
+            return value;
+          }
+        };
+
         console.log("Converting gateway configuration to OpenCode format...");
         console.log(`Input: ${gatewayOutputPath}`);
+        console.log(`Rewriting MCP host to: ${gatewayDomain || "(unchanged)"}`);
         if (cliServers.size > 0) {
           console.log(`CLI-mounted servers to filter: ${[...cliServers].join(", ")}`);
         }
@@ -290,6 +308,7 @@ engine:
           if (cliServers.has(name)) continue;
           const server = { ...entry };
           delete server.tools;
+          server.url = rewriteGatewayUrl(server.url);
           mcp[name] = { ...server, type: "remote", enabled: true };
         }
 
