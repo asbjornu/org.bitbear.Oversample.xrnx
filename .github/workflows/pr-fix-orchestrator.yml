@@ -25,9 +25,17 @@ jobs:
       - name: Ensure the gh-aw extension
         run: gh extension install github/gh-aw >/dev/null 2>&1 || true
 
+      # GH_TOKEN is the maintainer PAT (GH_AW_PUSH_TOKEN) for reads and marker
+      # comments, so the marker author matches `gh api user`. The workflow
+      # dispatch below deliberately overrides GH_TOKEN with the job's
+      # GITHUB_TOKEN (passed in as GH_AW_DISPATCH_TOKEN, since github.token has
+      # no shell variable of its own); that token carries actions: write, while
+      # a fine-grained PAT without Actions: write makes workflow_dispatch fail
+      # with HTTP 403.
       - name: Dispatch the fixer for new Copilot reviews
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          GH_AW_DISPATCH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
           MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
@@ -121,7 +129,13 @@ jobs:
             before=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?per_page=1" --jq '.workflow_runs[0].id // 0')
             echo "PR #$pr: dispatching fixer for review $review (round $round)"
             aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
-            if ! gh aw run pr-fix --repo "$REPO" --raw-field "aw_context=$aw_context"; then
+            # Dispatch with the job's GitHub token, which the job grants
+            # actions: write. GH_AW_PUSH_TOKEN is a PAT that pushes and writes
+            # review markers but may not carry Actions: write, and a dispatch
+            # attempt with it fails with HTTP 403 "Resource not accessible by
+            # personal access token". `${{ github.token }}` has no shell
+            # variable of its own, so it is passed in via GH_AW_DISPATCH_TOKEN.
+            if ! GH_TOKEN="$GH_AW_DISPATCH_TOKEN" gh aw run pr-fix --repo "$REPO" --raw-field "aw_context=$aw_context"; then
               echo "Dispatch failed for PR #$pr; marker stays pending (will retry)"
               continue
             fi
