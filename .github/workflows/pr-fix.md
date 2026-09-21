@@ -47,15 +47,11 @@ safe-outputs:
     max: 1
     signed-commits: false
     github-token: ${{ secrets.GH_AW_PUSH_TOKEN }}
-    allowed-files:
-      - "Oversample/**"
-      - "renoise/**"
-      - "test/**"
-      - "**.lua"
-      - "**.txt"
-      - "**.cfg"
-      - "**.json"
-      - "LICENSE"
+    # No `allowed-files` allowlist: the fixer may push to any path. gh-aw's
+    # default protected-files "request-review" policy is also disabled so a push
+    # is never refused or downgraded; sensitive paths are surfaced to humans as a
+    # PR comment by sensitive-file-warning.yml instead (see the notes below).
+    protected-files: allowed
   reply-to-pull-request-review-comment:
     max: 100
   resolve-pull-request-review-thread:
@@ -146,18 +142,20 @@ Security notes:
 - Same-repo guard: the pre-agent `steps:` guard rejects a dispatch whose
   `aw_context` does not name a same-repository pull request, so the agent never
   activates against untrusted fork code with repository secrets available.
-- File allowlist: the `allowed-files` globs above limit the model to the
-  project's source paths. The .github/workflows/ directory (including the
-  compiled lock file) is intentionally excluded; those files are edited by
-  the engineer and recompiled, not by the fixer. Targeting .github/workflows/
-  paths in allowed-files would require a GitHub App token with workflows:
-  write, which is not configured here.
-- Repository instructions: `*.md` is deliberately NOT in `allowed-files`, so
-  the fixer cannot push changes to `AGENTS.md` (or any other instructions
-  file) even though the OpenCode engine's agent-side safe-outputs config does
-  not list `AGENTS.md` in `protected_files`. The compiled Copilot engine added
-  it there; the OpenCode engine's `behaviors.manifest` files are only enforced
-  by the handler config. Keep the allowlist as the primary agent-side guard.
+- File scope: the fixer may push to any path. The previous `allowed-files`
+  allowlist rejected every push whenever the PR also touched a file outside
+  the list, because gh-aw validates the branch's cumulative diff rather than
+  just the new commits. That left valid source fixes unlandable on PRs that
+  also changed `README.md`, `.github/workflows/`, or `.luacheckrc`. The
+  allowlist is removed and `protected-files: allowed` keeps gh-aw from
+  refusing or downgrading those pushes.
+- Sensitive files: `sensitive-file-warning.yml` posts (and maintains) a
+  warning comment on any same-repo PR that touches sensitive paths such as
+  `.github/**`, `.agents/**`, `AGENTS.md`, `README.md`, `LICENSE`,
+  `.luacheckrc`, and dependency manifests. A human decides whether such edits
+  are acceptable; the fixer itself is not blocked.
+- Workflow pushes: GH_AW_PUSH_TOKEN carries the `workflow` scope (see the push
+  auth note above), so the fixer can push `.github/workflows/*` changes.
 - Agent read access: `contents: read` is granted so the agent job's
   actions/checkout can fetch the PR head it needs to inspect and edit.
 - Effective token grants: gh-aw's compiled safe_outputs and conclusion jobs
@@ -200,7 +198,10 @@ raised, using the OpenCode CLI.
    `noop` safe-output tool and stop.
 
 2. If there are concrete, actionable issues, address each one (file:line + the
-   fix). Stay within the `allowed-files` paths. Do not make unrelated changes.
+   fix). You may edit any file the fix requires, including sensitive paths such
+   as `.github/**`, `.agents/**`, `AGENTS.md`, and `README.md`; edits there are
+   flagged to humans by `sensitive-file-warning.yml`, so only touch them when
+   the review genuinely requires it. Do not make unrelated changes.
    Keep edits minimal and aligned with the existing code style. Stage the
    changes and create a `fixup!` commit per changed file targeting the commit
    that last touched it, so the branch history stays clean. Only target a commit

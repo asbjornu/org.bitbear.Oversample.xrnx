@@ -1,0 +1,84 @@
+name: Sensitive file warning
+
+# Flags pull requests that modify files which deserve extra human scrutiny.
+# The PR Fixer is allowed to edit any path (see pr-fix.md), so this workflow is
+# the guardrail that surfaces sensitive edits for a human instead of blocking
+# the fixer. It maintains a single sticky comment per PR and removes it once the
+# PR no longer touches anything sensitive.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: sensitive-file-warning-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  warn:
+    # Same-repo PRs only, so repository secrets are never used on fork PRs.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Warn when a PR touches sensitive files
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Paths that warrant extra review. Mirrors gh-aw's protected-file set
+          # plus this repository's dotfiles and dependency manifests.
+          cat > "$RUNNER_TEMP/patterns.txt" <<'PATTERNS'
+          ^\.github/
+          ^\.agents/
+          ^\.luacheckrc$
+          ^\.gitattributes$
+          ^\.gitignore$
+          ^CODEOWNERS$
+          ^AGENTS\.md$
+          ^README\.md$
+          ^LICENSE$
+          ^(package|package-lock)\.json$
+          ^(yarn|pnpm-lock)\.(lock|yaml)$
+          PATTERNS
+
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" --jq '.[].filename')
+          hits=$(printf '%s\n' "$files" | grep -E -f "$RUNNER_TEMP/patterns.txt" || true)
+
+          marker='<!-- sensitive-file-warning -->'
+          comment_id=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n 1 || true)
+
+          if [ -z "$hits" ]; then
+            echo "No sensitive files touched."
+            if [ -n "$comment_id" ]; then
+              gh api -X DELETE "repos/$REPO/issues/comments/$comment_id" >/dev/null
+            fi
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/body.md" <<'HEADER'
+          <!-- sensitive-file-warning -->
+          > [!WARNING]
+          > This pull request modifies files that deserve extra scrutiny:
+          HEADER
+          tick='`'
+          while IFS= read -r f; do
+            printf -- '- %s%s%s\n' "$tick" "$f" "$tick" >> "$RUNNER_TEMP/body.md"
+          done <<< "$hits"
+          printf '\nA human should confirm these changes are intended before merge.\n' >> "$RUNNER_TEMP/body.md"
+
+          if [ -n "$comment_id" ]; then
+            jq -Rs '{body: .}' "$RUNNER_TEMP/body.md" \
+              | gh api -X PATCH "repos/$REPO/issues/comments/$comment_id" --input - >/dev/null
+          else
+            jq -Rs '{body: .}' "$RUNNER_TEMP/body.md" \
+              | gh api -X POST "repos/$REPO/issues/$PR/comments" --input - >/dev/null
+          fi
+          echo "Posted sensitive-file warning for: $hits"
