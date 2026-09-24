@@ -208,14 +208,17 @@ local global_cache_dirty = false
 local device_names_dirty = false
 local global_device_names_dirty = false
 
--- Count elements of a renoise.Document list, robust to size being a property
--- or a function depending on the API version.
+-- Count elements of a renoise.Document ObservableList. Observable lists expose
+-- their length through the :size() method; plain Lua tables (the in-memory
+-- mirrors and test doubles) fall back to a size field or the length operator.
 local function list_count(list)
-  local n = list.size
-  if type(n) == "function" then
-    n = list:size()
+  if type(list.size) == "function" then
+    return list:size()
   end
-  return n
+  if list.size ~= nil then
+    return list.size
+  end
+  return #list
 end
 
 -- Coerce a renoise.Document list element to a plain string. Document Node
@@ -284,9 +287,7 @@ local function merge_osig_list(list)
         -- names are stripped to the same vendor name for lookup.
         local norm = core.normalize_device_name(raw_name)
         local has_host_prefix = (norm ~= raw_name)
-        if has_host_prefix and raw_name:sub(1, 5) ~= "VST3:" then
-           -- skip non-VST3 (VST2/AU/CLAP/LV2/DX) signature entry
-        else
+        if not has_host_prefix or raw_name:sub(1, 5) == "VST3:" then
           local name = norm
           local entries = core.decode_osig(fields[2])
           if name and #entries > 0 then
@@ -1694,6 +1695,9 @@ end
 -- used after scans and after "Set" is applied).
 local function set_value_control(row_number, device_name, device_instances, parameter_index)
     local device = device_instances[1]
+    if not device then
+        return
+    end
     local parameter = device:parameter(parameter_index)
     apply_value_to_control(row_number, device_name, device_instances, parameter_index, parameter.value)
 end
@@ -1703,7 +1707,8 @@ end
 -- the value is applied through the VST3 state-chunk signature. The current label
 -- is detected from the live VST3 blob when a signature exists, otherwise the first
 -- choice is assumed.
-local function show_osig_dropdown(row_number, device_name, device_instances, choices, parameter_name, sibling, sibling_index)
+local function show_osig_dropdown(row_number, device_name, device_instances,
+    choices, parameter_name, sibling, sibling_index)
     selected_devices[row_number].parameter_name = parameter_name
     selected_devices[row_number].parameter_index = nil
     selected_devices[row_number].osig_driven = true
@@ -2054,7 +2059,8 @@ function enumerate_devices(track)
 
             if device.is_active then
                 device_scan_count = device_scan_count + 1
-                vb.views.status.text = string.format('Scanning devices... (%d/%d)', device_scan_count, device_scan_total)
+                vb.views.status.text = string.format(
+                    'Scanning devices... (%d/%d)', device_scan_count, device_scan_total)
 
                 if not devices[device.name] then
                     -- print('Resetting device "' .. device.name .. '".')
@@ -2158,13 +2164,11 @@ function get_parameters(device_name)
     return parameters
 end
 
--- Count a plugin's exposed parameters by probing until device:parameter(p)
--- raises (the true end of the list). Used to validate cached lists, since the
--- length operator ('#') can under-report the count for some VST3 plugins.
 -- Count the parameters a device actually exposes by probing device:parameter(p)
--- until it raises. Declared global (not local) because get_parameters,
--- apply_parameter_value and enumerate_parameters are defined before this point and
--- call it; a forward reference to a local would resolve to nil and crash.
+-- until it raises (the true end of the list). Used to validate cached lists,
+-- since the length operator ('#') can under-report the count for some VST3
+-- plugins. Declared local (forward-declared above) because get_parameters,
+-- apply_parameter_value and enumerate_parameters call it.
 function count_parameters(device)
     local n = 0
     local p = 1
@@ -2235,7 +2239,8 @@ function extreme_values(extreme)
                         if choices and #choices > 0 then
                             selected_device.osig_target_label =
                                 (extreme == "min") and choices[1].label or choices[#choices].label
-                            local sec_popup = vb.views[create_settings_row_identifiers(row_number).parameter_value_secondary_popup_id]
+                            local sec_ids = create_settings_row_identifiers(row_number)
+                            local sec_popup = vb.views[sec_ids.parameter_value_secondary_popup_id]
                             if sec_popup and sec_popup.visible then
                                 local sch = selected_device.secondary_parameter_choices
                                 if sch and #sch > 0 then
@@ -2373,10 +2378,9 @@ end
 
 -- Enable/disable the three action buttons (Set, Minimize, Maximize) together,
 -- mirroring the "Set" button's active state used while scans are in flight.
--- Declared global (not local) because it is invoked from several top-level
--- functions (enumerate_tracks, enumerate_devices, add_device_items, render_settings_rows…)
--- that are defined before this point; a forward reference to a local would resolve
--- to the global environment (nil) and crash the scan.
+-- Declared local (forward-declared above) because it is invoked from several
+-- top-level functions (enumerate_tracks, enumerate_devices, add_device_items,
+-- render_settings_rows…) that are defined before this point.
 function set_main_buttons_active(active)
     if not vb or not vb.views then
         return
