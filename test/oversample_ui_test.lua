@@ -4,6 +4,11 @@ package.path = "./?.lua;" .. package.path
 local lu = require("luaunit")
 local core = require("Oversample/oversample_core")
 
+-- The tool module's functions, refreshed by each setUp via dofile.
+local oversample, destroy, create_settings_row, update_secondary
+local parameter_selected, device_selected, set_values, load_tool_cache
+local refresh_device_popups, add_device_items, set_main_buttons_active
+
 local function upvalue(fn, wanted)
     local i = 1
     while true do
@@ -101,7 +106,18 @@ function TestDialogLayout:setUp()
     }
     -- Background scans stay pending; each test supplies only the device state it needs.
     ProcessSlicer = function() return {start = function() end} end
-    dofile("Oversample/Oversample.lua")
+    local module = dofile("Oversample/Oversample.lua")
+    oversample = module.oversample
+    destroy = module.destroy
+    create_settings_row = module.create_settings_row
+    update_secondary = module.update_secondary
+    parameter_selected = module.parameter_selected
+    device_selected = module.device_selected
+    set_values = module.set_values
+    load_tool_cache = module.load_tool_cache
+    refresh_device_popups = module.refresh_device_popups
+    add_device_items = module.add_device_items
+    set_main_buttons_active = module.set_main_buttons_active
     oversample()
     self.views = self.builder.views
     self.row = create_settings_row()
