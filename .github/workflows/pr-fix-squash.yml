@@ -103,7 +103,11 @@ jobs:
             esac
             token="${rest%% *}"
             sha[$i]="$(git rev-parse --verify -q "${token}^{commit}" 2>/dev/null || echo "$token")"
-            subj[$i]="${rest#* }"
+            # Read the subject from the commit object, not the todo line: git >=
+            # 2.55 writes todo lines as "pick <sha> # <subject>", and stripping
+            # that separator would corrupt a legacy subject that itself begins
+            # with "# " (e.g. "# Render").
+            subj[$i]="$(git log -1 --format=%s "${sha[$i]}" 2>/dev/null || echo "${rest#* }")"
           done
           declare -A moved move_to
           for ((i=0; i<n; i++)); do
