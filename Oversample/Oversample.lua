@@ -4,7 +4,6 @@ local getn = table.getn or function(t) return #t end
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
 -- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
 local core = require("Oversample/oversample_core")
-local known_devices_parameters = core.known_devices_parameters
 local encode_field = core.encode_field
 local decode_fields = core.decode_fields
 local match_parameter = core.match_parameter
@@ -14,7 +13,6 @@ local nearest_choice_index = core.nearest_choice_index
 local same_name_set = core.same_name_set
 
 local vb = renoise.ViewBuilder()
-local DEFAULT_DIALOG_MARGIN = renoise.ViewBuilder.DEFAULT_DIALOG_MARGIN
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
 local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
 local CONTENT_HEIGHT = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
@@ -463,22 +461,13 @@ local function collect_device_names()
   local names = {}
   local seen = {}
   local song = renoise.song()
-  local total_instances = 0
-  local active_instances = 0
-  local deduped = 0
   for t = 1, getn(song.tracks) do
     local track = song:track(t)
     for d = 1, getn(track.devices) do
       local device = track:device(d)
-      total_instances = total_instances + 1
-      if (device.is_active) then
-        active_instances = active_instances + 1
-      end
       if (device.is_active and not seen[device.name]) then
         seen[device.name] = true
         names[#names + 1] = device.name
-      elseif (device.is_active and seen[device.name]) then
-        deduped = deduped + 1
       end
     end
   end
@@ -897,8 +886,6 @@ function create_settings_row()
                 if (not selected_devices[row_number]) then
                     return
                 end
-                local ids = create_settings_row_identifiers(row_number)
-                local popup = vb.views[ids["parameter_value_popup_id"]]
                 local device_popup = vb.views[device_popup_id]
                 local device_name = device_popup.items[device_popup.value]
                 local device_instances = ensure_device_instances(device_name)
@@ -976,8 +963,6 @@ function create_settings_row()
                     if (not selected_devices[row_number]) then
                         return
                     end
-                    local ids = create_settings_row_identifiers(row_number)
-                    local spopup = vb.views[ids["parameter_value_secondary_popup_id"]]
                     local device_popup = vb.views[device_popup_id]
                     local device_name = device_popup.items[device_popup.value]
                     local device_instances = ensure_device_instances(device_name)
@@ -1372,7 +1357,7 @@ end
 -- nearest_choice_index is provided by the core module.
 
 -- SECONDARY_SHOW_WHEN.
-local function update_secondary_osig(row_number, device_name, device_instances)
+local function update_secondary_osig(row_number, device_name)
     local ids = create_settings_row_identifiers(row_number)
     local sec_popup = vb.views[ids["parameter_value_secondary_popup_id"]]
     local sec_label = vb.views[ids["parameter_value_secondary_label_id"]]
@@ -1522,7 +1507,7 @@ end
 
 function update_secondary(row_number, device_name, device_instances)
     if (selected_devices[row_number] and selected_devices[row_number]["osig_driven"]) then
-        update_secondary_osig(row_number, device_name, device_instances)
+        update_secondary_osig(row_number, device_name)
         return
     end
     local ids = create_settings_row_identifiers(row_number)
@@ -2013,15 +1998,12 @@ function parameter_selected(parameter_index, parameter_name, device_name, row_nu
     selected_devices[row_number]["parameter_name"] = parameter_name
     selected_devices[row_number]["parameter_index"] = parameter_index
 
-    for k, v in ipairs(device_instances) do
-        set_main_buttons_active(false)
-        set_value_control(row_number, device_name, device_instances, parameter_index)
-    end
-
+    set_main_buttons_active(false)
+    set_value_control(row_number, device_name, device_instances, parameter_index)
     set_main_buttons_active(true)
 end
 
-function parameter_value_changed(parameter_value, parameter_name, device_name, row_number)
+function parameter_value_changed(parameter_value, _parameter_name, _device_name, row_number)
     selected_devices[row_number]["parameter_value"] = parameter_value
 end
 
@@ -2328,7 +2310,6 @@ function extreme_values(extreme)
                 if (selected_devices[row_number]["osig_multi_axis"]) then
                     -- target_label is the combined "axis1 / axis2"; show axis1 in the
                     -- primary popup and let update_secondary place axis2 in the secondary.
-                    local axes = selected_devices[row_number]["osig_axes"]
                     local a1, a2 = target_label, nil
                     if (type(target_label) == "string") then
                         local sep = target_label:find(SECONDARY_SEP, 1, true)
@@ -2504,7 +2485,7 @@ local function apply_osig_to_device_name(device_name, target, state)
     local oc = core.osig_choices(norm)
     if (oc) then
       ordered = {}
-      for i, c in ipairs(oc) do
+      for _, c in ipairs(oc) do
         ordered[#ordered + 1] = c.label
       end
     else
@@ -2595,7 +2576,7 @@ function set_values()
             local target = osig_target_for_row(row_number) or "toggle"
             parameters_changed = parameters_changed + apply_osig_to_device_name(device_name, target, osig_save_state)
         elseif (param_index ~= nil) then
-            for i, device in ipairs(device_instances) do
+            for _, device in ipairs(device_instances) do
                 local count = count_parameters(device)
                 local parameter_index = selected_device["parameter_index"]
 
@@ -2640,9 +2621,6 @@ function set_values()
             end
         end
     end
-
-    local verb = nil
-    local button_text = nil
 
     vb.views.status.text = parameters_changed .. ' parameter values set.'
     set_main_buttons_active(true)
