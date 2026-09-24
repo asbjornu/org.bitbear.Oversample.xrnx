@@ -199,7 +199,7 @@ function TestDialogLayout:test_osig_secondary_shows_for_combined_linear_phase_la
         setmetatable(p, {
             __newindex = function(t, k, v) rawset(t, k, v) end,
             __index = function(t, k)
-                if (k == "value_string") then return labels[(t.value or 0) + 1] or "" end
+                if k == "value_string" then return labels[(t.value or 0) + 1] or "" end
                 return rawget(t, k)
             end
         })
@@ -207,8 +207,8 @@ function TestDialogLayout:test_osig_secondary_shows_for_combined_linear_phase_la
     end
     local sibling = {
         parameter = function(_, p)
-            if (p == 1) then return make_param("Oversampling", { "Off", "2x", "4x" }) end
-            if (p == 2) then return make_param("Processing Resolution", { "Low", "Medium", "High" }) end
+            if p == 1 then return make_param("Oversampling", { "Off", "2x", "4x" }) end
+            if p == 2 then return make_param("Processing Resolution", { "Low", "Medium", "High" }) end
             error("no such parameter")
         end
     }
@@ -251,6 +251,15 @@ function TestDialogLayout:test_primary_switches_never_temporarily_expand_row()
     lu.assertEquals(self.row.width, width)
 end
 
+function TestDialogLayout:test_parameter_selected_without_device_instances_is_safe()
+    -- A device can be listed from cache while no live instance exists in the
+    -- song; selecting one of its parameters must not crash the value control.
+    self.selected[1] = {}
+    parameter_selected(1, "Oversampling", "VST: FabFilter: Pro-C 2", 1)
+    lu.assertEquals(self.selected[1].parameter_name, "Oversampling")
+    lu.assertEquals(self.selected[1].parameter_index, 1)
+end
+
 function TestDialogLayout:test_blank_value_strings_are_not_enum_choices()
     -- A parameter with distinct snapped values but no display text (empty or
     -- whitespace-only value_string) is not an enum; it must not produce a popup
@@ -260,7 +269,7 @@ function TestDialogLayout:test_blank_value_strings_are_not_enum_choices()
         local p = setmetatable({ name = name, value_min = 0, value_max = 3, value_quantum = 1 }, {
             __newindex = function(t, k, v) rawset(t, k, v) end,
             __index = function(t, k)
-                if (k == "value_string") then return display end
+                if k == "value_string" then return display end
                 return rawget(t, k)
             end,
         })
@@ -395,12 +404,12 @@ function TestDialogLayout:test_apply_parameter_value_clears_stale_multi_axis_sta
    self.selected[1] = {}
    devices["VST3: FabFilter: Saturn 2"] = { instances = { { active_preset_data = "" } } }
    app(1, "VST3: FabFilter: Saturn 2", "Oversampling")
-   lu.assertTrue(self.selected[1]["osig_multi_axis"])
-   lu.assertNotEquals(self.selected[1]["osig_axes"], nil)
+   lu.assertTrue(self.selected[1].osig_multi_axis)
+   lu.assertNotEquals(self.selected[1].osig_axes, nil)
    devices["VST3: FabFilter: Pro-Q 3"] = { instances = { { active_preset_data = "" } } }
    app(1, "VST3: FabFilter: Pro-Q 3", "Oversampling")
-   lu.assertIsNil(self.selected[1]["osig_multi_axis"])
-   lu.assertIsNil(self.selected[1]["osig_axes"])
+   lu.assertIsNil(self.selected[1].osig_multi_axis)
+   lu.assertIsNil(self.selected[1].osig_axes)
 end
 
 function TestDialogLayout:test_update_secondary_osig_multi_axis_clears_stale_secondary()
@@ -422,11 +431,11 @@ function TestDialogLayout:test_update_secondary_osig_multi_axis_clears_stale_sec
       secondary_parameter_choices = { { label = "X", value = 1 } },
    }
    upd(1, "VST3: FabFilter: Saturn 2", { { active_preset_data = "" } })
-   lu.assertIsNil(self.selected[1]["osig_target_label_sec"])
-   lu.assertIsNil(self.selected[1]["secondary_parameter_choices"])
-   lu.assertIsNil(self.selected[1]["secondary_parameter_index"])
-   lu.assertIsNil(self.selected[1]["secondary_parameter_name"])
-    lu.assertIsNil(self.selected[1]["secondary_parameter_value"])
+   lu.assertIsNil(self.selected[1].osig_target_label_sec)
+   lu.assertIsNil(self.selected[1].secondary_parameter_choices)
+   lu.assertIsNil(self.selected[1].secondary_parameter_index)
+   lu.assertIsNil(self.selected[1].secondary_parameter_name)
+    lu.assertIsNil(self.selected[1].secondary_parameter_value)
     lu.assertEquals(self.secondary.items, axes[2].labels)
  end
 
@@ -462,7 +471,7 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
         local p = { name = "Processing Resolution", value_min = 0, value_max = 1, value_quantum = 0.25, _v = 0 }
         return setmetatable(p, {
             __newindex = function(t, k, v)
-                if (k == "value") then
+                if k == "value" then
                     rawset(t, "_v", v)
                     rawset(t, "value_string", labels[math.floor(v * 4 + 0.5) + 1] or "?")
                 else
@@ -470,12 +479,12 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
                 end
             end,
             __index = function(t, k)
-                if (k == "value") then return rawget(t, "_v") end
+                if k == "value" then return rawget(t, "_v") end
                 return rawget(t, k)
             end,
         })
     end
-    local sibling = { parameter = function(_, p) if (p == 1) then return make_param() end error("no such parameter") end }
+    local sibling = { parameter = function(_, p) if p == 1 then return make_param() end error("no such parameter") end }
     self.selected[1] = {
         osig_driven = true,
         parameter_name = "Processing Mode",
@@ -487,7 +496,7 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
     local cache = upvalue(upvalue(upd, "parameter_choices"), "parameter_choices_cache")
     for k in pairs(cache) do cache[k] = nil end
     upd(1, "VST3: FabFilter: Pro-Q 3", { { active_preset_data = "" } })
-    lu.assertEquals(self.selected[1]["osig_target_label_sec"], "Maximum")
+    lu.assertEquals(self.selected[1].osig_target_label_sec, "Maximum")
  end
 
 function TestDialogLayout:test_merge_osig_list_normalizes_cached_name()
@@ -553,7 +562,7 @@ function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
         [1] = core.encode_field("Device") .. core.encode_field("P1") .. core.encode_field("P2"),
     }
     merge(list)
-    lu.assertEquals(cached["Device"], { "P1", "P2" })
+    lu.assertEquals(cached.Device, { "P1", "P2" })
 end
 
 function TestDialogLayout:test_merge_name_list_dedupes_preserving_order()
