@@ -509,6 +509,15 @@ local function ensure_device_instances(device_name)
   return instances
 end
 
+-- The exposed parameter names of a device, in 1-based parameter-index order.
+local function parameter_names(device)
+  local names = {}
+  for p = 1, count_parameters(device) do
+    names[p] = device:parameter(p).name
+  end
+  return names
+end
+
 -- Find another device in the song that is the same plugin (matched by normalised
 -- name) but a different build, and which exposes the given parameter. This is how
 -- we obtain dropdown labels for a VST3 device whose oversampling parameter is not
@@ -525,12 +534,7 @@ local function find_sibling_device(device_name, parameter_name)
       local dev = track:device(d)
       if (dev.is_active and core.normalize_device_name(dev.name) == norm
           and dev.name ~= device_name) then
-        local count = count_parameters(dev)
-        local names = {}
-        for p = 1, count do
-          names[p] = dev:parameter(p).name
-        end
-        if (match_parameter(names, parameter_name)) then
+        if (match_parameter(parameter_names(dev), parameter_name)) then
           if (dev.name:sub(1, 4) == "VST:") then
             return dev
           end
@@ -542,9 +546,76 @@ local function find_sibling_device(device_name, parameter_name)
   return fallback
 end
 
+-- Locate a sibling build of the same plugin that exposes `parameter_name` and the
+-- 1-based index of that parameter. Returns sibling, index (both nil when absent).
+local function resolve_sibling_parameter(device_name, parameter_name)
+  local sibling = find_sibling_device(device_name, parameter_name)
+  if (not sibling) then
+    return nil, nil
+  end
+  return sibling, match_parameter(parameter_names(sibling), parameter_name)
+end
+
+-- The natural, ascending oversampling labels for a device: from
+-- known_osig_order when defined, otherwise the distinct labels found in the
+-- learned `entries`, sorted alphabetically.
+local function osig_label_order(norm, entries)
+  local known = core.osig_choices(norm)
+  if (known) then
+    local labels = {}
+    for i, c in ipairs(known) do
+      labels[i] = c.label
+    end
+    return labels
+  end
+  local seen = {}
+  local labels = {}
+  for _, e in ipairs(entries) do
+    for lab in pairs(e.values) do
+      if (not seen[lab]) then
+        seen[lab] = true
+        labels[#labels + 1] = lab
+      end
+    end
+  end
+  table.sort(labels)
+  return labels
+end
+
+-- osig dropdown choices ({ label, value }) for a device, in natural order.
+local function osig_choices_for(norm, entries)
+  local choices = {}
+  for i, lab in ipairs(osig_label_order(norm, entries)) do
+    choices[i] = { label = lab, value = i }
+  end
+  return choices
+end
+
 -- The separator used to combine a primary + dependent secondary label into a
 -- single osig target key (e.g. "Linear Phase / Maximum").
 local SECONDARY_SEP = " / "
+
+-- Split a combined "axis1 / axis2" osig label; a label without the separator
+-- yields the label itself and nil for the second axis.
+local function split_target_label(label)
+  if (type(label) ~= "string") then
+    return label, nil
+  end
+  local sep = label:find(SECONDARY_SEP, 1, true)
+  if (not sep) then
+    return label, nil
+  end
+  return label:sub(1, sep - 1), label:sub(sep + #SECONDARY_SEP)
+end
+
+-- Combine two independent axis labels into a single osig target key; a missing
+-- or empty second axis leaves the primary label unchanged.
+local function join_target_label(axis1, axis2)
+  if (not axis2 or axis2 == "") then
+    return axis1
+  end
+  return axis1 .. SECONDARY_SEP .. axis2
+end
 
 -- Compute the combined osig target label for a row (primary, plus secondary when
 -- one is active). Returns nil for non-osig-driven rows.
@@ -555,21 +626,18 @@ local function osig_target_for_row(row_number)
   end
   local primary = sd["osig_target_label"]
   local sec = sd["osig_target_label_sec"]
-  if (sec) then
-    if (not primary) then
-      return sec
-    end
-    -- A primary can itself be a combined label (e.g. Pro-Q 3's "Linear Phase / Medium");
-    -- the dependent secondary replaces the trailing portion (the axis-1 value before the
-    -- first " / "), so we never append a third segment that matches no signature label
-    -- (e.g. "Linear Phase / Medium / High").
-    local sep = primary:find(SECONDARY_SEP, 1, true)
-    if (sep) then
-      return primary:sub(1, sep - 1) .. SECONDARY_SEP .. sec
-    end
-    return primary .. SECONDARY_SEP .. sec
+  if (not sec) then
+    return primary
   end
-  return primary
+  if (not primary) then
+    return sec
+  end
+  -- A primary can itself be a combined label (e.g. Pro-Q 3's "Linear Phase / Medium");
+  -- the dependent secondary replaces the trailing portion (the axis-1 value before the
+  -- first " / "), so we never append a third segment that matches no signature label
+  -- (e.g. "Linear Phase / Medium / High").
+  local axis1 = split_target_label(primary)
+  return axis1 .. SECONDARY_SEP .. sec
 end
 
 local on_song_devices_changed = function()
@@ -906,11 +974,7 @@ function create_settings_row()
                             if (a2 == nil and axes and axes[2]) then
                                 a2 = axes[2].labels[1]
                             end
-                            if (a2 and a2 ~= "") then
-                                selected_devices[row_number]["osig_target_label"] = lbl .. SECONDARY_SEP .. a2
-                            else
-                                selected_devices[row_number]["osig_target_label"] = lbl
-                            end
+                            selected_devices[row_number]["osig_target_label"] = join_target_label(lbl, a2)
                         else
                             selected_devices[row_number]["osig_target_label"] = lbl
                             selected_devices[row_number]["osig_target_label_sec"] = nil
@@ -979,16 +1043,10 @@ function create_settings_row()
                             local sec_labels = axes and axes[2] and axes[2].labels
                             if (sec_labels and sec_labels[value]) then
                                 local a2 = sec_labels[value]
-                                local a1 = selected_devices[row_number]["osig_target_label"]
-                                local a1part = a1
-                                if (type(a1) == "string") then
-                                    local sep = a1:find(SECONDARY_SEP, 1, true)
-                                    if (sep) then
-                                        a1part = a1:sub(1, sep - 1)
-                                    end
-                                end
+                                local a1 = split_target_label(
+                                    selected_devices[row_number]["osig_target_label"])
                                 selected_devices[row_number]["osig_axis2_label"] = a2
-                                selected_devices[row_number]["osig_target_label"] = a1part .. SECONDARY_SEP .. a2
+                                selected_devices[row_number]["osig_target_label"] = join_target_label(a1, a2)
                             end
                         else
                             -- VST3 row: record the chosen secondary label for the combined
@@ -1357,6 +1415,28 @@ end
 -- nearest_choice_index is provided by the core module.
 
 -- SECONDARY_SHOW_WHEN.
+
+-- Hide the reserved secondary controls and clear their per-row state. The
+-- enclosing row keeps its fixed width while these are invisible.
+local function clear_secondary(row_number)
+    local ids = create_settings_row_identifiers(row_number)
+    local sec_popup = vb.views[ids["parameter_value_secondary_popup_id"]]
+    local sec_label = vb.views[ids["parameter_value_secondary_label_id"]]
+    sec_popup.items = {""}
+    sec_popup.value = 1
+    sec_popup.active = false
+    sec_popup.visible = false
+    if (sec_label) then
+        sec_label.text = ""
+        sec_label.visible = false
+    end
+    local sd = selected_devices[row_number]
+    sd["secondary_parameter_index"] = nil
+    sd["secondary_parameter_value"] = nil
+    sd["secondary_parameter_name"] = nil
+    sd["osig_target_label_sec"] = nil
+end
+
 local function update_secondary_osig(row_number, device_name)
     local ids = create_settings_row_identifiers(row_number)
     local sec_popup = vb.views[ids["parameter_value_secondary_popup_id"]]
@@ -1365,19 +1445,7 @@ local function update_secondary_osig(row_number, device_name)
     local primary_name = known_primary(device_name)
 
     local function hide_secondary()
-        -- The enclosing row reserves the space while these controls are hidden.
-        sec_popup.items = {""}
-        sec_popup.value = 1
-        sec_popup.active = false
-        sec_popup.visible = false
-        if (sec_label) then
-            sec_label.text = ""
-            sec_label.visible = false
-        end
-        selected_devices[row_number]["secondary_parameter_index"] = nil
-        selected_devices[row_number]["secondary_parameter_value"] = nil
-        selected_devices[row_number]["secondary_parameter_name"] = nil
-        selected_devices[row_number]["osig_target_label_sec"] = nil
+        clear_secondary(row_number)
     end
 
     -- Multiple independent oversampling axes (e.g. Saturn 2's "High Quality" mode and
@@ -1436,31 +1504,18 @@ local function update_secondary_osig(row_number, device_name)
     local primary_label = selected_devices[row_number]["osig_target_label"]
     -- osig labels can combine multiple axes (e.g. Pro-Q 3's "Linear Phase / Medium");
     -- only the portion before the " / " separator is the primary-axis value we compare
-    -- against SECONDARY_SHOW_WHEN, so the dependent secondary still appears for those modes.
-    local primary_axis = primary_label
-    if (primary_axis) then
-        local sep = primary_axis:find(SECONDARY_SEP, 1, true)
-        if (sep) then primary_axis = primary_axis:sub(1, sep - 1) end
-    end
-    -- The combined label's trailing portion is the dependent-secondary value it already
-    -- implies (e.g. the "Maximum" in "Linear Phase / Maximum"), used to seed the secondary
-    -- so Minimize/Maximize land on the correct resolution rather than the first choice.
-    local primary_suffix
-    if (primary_label) then
-        local sep = primary_label:find(SECONDARY_SEP, 1, true)
-        if (sep) then primary_suffix = primary_label:sub(sep + 3) end
-    end
+    -- against SECONDARY_SHOW_WHEN, so the dependent secondary still appears for those
+    -- modes. The trailing portion is the dependent-secondary value the combined label
+    -- already implies (e.g. the "Maximum" in "Linear Phase / Maximum"), used to seed the
+    -- secondary so Minimize/Maximize land on the correct resolution rather than the
+    -- first choice.
+    local primary_axis, primary_suffix = split_target_label(primary_label)
     if (not primary_label or not loose_eq(primary_axis, SECONDARY_SHOW_WHEN)) then
         hide_secondary()
         return
     end
 
-    local scount = count_parameters(sibling)
-    local snames = {}
-    for p = 1, scount do
-        snames[p] = sibling:parameter(p).name
-    end
-    local sec_index = match_parameter(snames, sec_name)
+    local sec_index = match_parameter(parameter_names(sibling), sec_name)
     if (not sec_index) then
         hide_secondary()
         return
@@ -1517,17 +1572,7 @@ function update_secondary(row_number, device_name, device_instances)
     local primary_name = known_primary(device_name)
 
     local function hide_secondary()
-        sec_popup.items = {""}
-        sec_popup.value = 1
-        sec_popup.active = false
-        sec_popup.visible = false
-        if (sec_label) then
-            sec_label.text = ""
-            sec_label.visible = false
-        end
-        selected_devices[row_number]["secondary_parameter_index"] = nil
-        selected_devices[row_number]["secondary_parameter_value"] = nil
-        selected_devices[row_number]["secondary_parameter_name"] = nil
+        clear_secondary(row_number)
     end
 
     if (not sec_name or not primary_name) then
@@ -1565,12 +1610,7 @@ function update_secondary(row_number, device_name, device_instances)
         return
     end
 
-    local names = {}
-    local count = count_parameters(device)
-    for p = 1, count do
-        names[p] = device:parameter(p).name
-    end
-    local sec_index = match_parameter(names, sec_name)
+    local sec_index = match_parameter(parameter_names(device), sec_name)
     if (not sec_index) then
         hide_secondary()
         return
@@ -1696,19 +1736,13 @@ local function show_osig_dropdown(row_number, device_name, device_instances, cho
         -- target_label is the combined "axis1 / axis2"; the primary popup only shows
         -- axis1, and the secondary popup (filled by update_secondary) shows axis2.
         local axes = selected_devices[row_number]["osig_axes"]
-        local a1, a2 = target_label, nil
-        if (type(target_label) == "string") then
-            local sep = target_label:find(SECONDARY_SEP, 1, true)
-            if (sep) then
-                a1 = target_label:sub(1, sep - 1)
-                a2 = target_label:sub(sep + 3)
-            else
-                -- No separator: default the second axis to its first (off) label so the
-                -- stored target is always the full combined key.
-                a2 = axes[2] and axes[2].labels[1]
-                target_label = a1 .. SECONDARY_SEP .. (a2 or "")
-                selected_devices[row_number]["osig_target_label"] = target_label
-            end
+        local a1, a2 = split_target_label(target_label)
+        if (type(target_label) == "string" and a2 == nil) then
+            -- No separator: default the second axis to its first (off) label so the
+            -- stored target is always the full combined key.
+            a2 = axes[2] and axes[2].labels[1]
+            target_label = a1 .. SECONDARY_SEP .. (a2 or "")
+            selected_devices[row_number]["osig_target_label"] = target_label
         end
         selected_devices[row_number]["osig_axis2_label"] = a2
         for i, c in ipairs(choices) do
@@ -1750,7 +1784,6 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     local norm = core.normalize_device_name(device_name)
     local sig = osig[norm]
     if (sig and #sig > 0 and device_name:sub(1, 5) == "VST3:") then
-        local choices = core.osig_choices(norm)
         -- Several independent oversampling fields (e.g. Saturn 2's "High Quality" mode
         -- and "Linear Phase" toggle): present one dropdown per axis. The primary popup
         -- shows the first axis' labels; a separate secondary popup shows the next axis;
@@ -1771,48 +1804,20 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
         -- keys (which would then fail to match any signature label).
         selected_devices[row_number]["osig_multi_axis"] = nil
         selected_devices[row_number]["osig_axes"] = nil
-        if (not choices) then
-            local seen = {}
-            local labels = {}
-            for _, e in ipairs(sig) do
-                for lab in pairs(e.values) do
-                    if (not seen[lab]) then
-                        seen[lab] = true
-                        labels[#labels + 1] = lab
-                    end
-                end
-            end
-            table.sort(labels)
-            choices = {}
-            for i, l in ipairs(labels) do
-                choices[i] = { label = l, value = i }
-            end
-        end
+        local choices = osig_choices_for(norm, sig)
         -- A dependent secondary (e.g. Pro-Q 3's "Processing Resolution") is driven by a
         -- sibling device that exposes the host parameter; pass it through so the secondary
         -- dropdown can appear (update_secondary_osig needs the sibling to read its values).
         local sibling, sibling_index
         local primary_name = known_primary(device_name)
         if (primary_name) then
-            sibling = find_sibling_device(device_name, primary_name)
-            if (sibling) then
-                local scount = count_parameters(sibling)
-                local snames = {}
-                for p = 1, scount do snames[p] = sibling:parameter(p).name end
-                sibling_index = match_parameter(snames, primary_name)
-            end
+            sibling, sibling_index = resolve_sibling_parameter(device_name, primary_name)
         end
         show_osig_dropdown(row_number, device_name, device_instances, choices, parameter_name, sibling, sibling_index)
         return
     end
 
-    local count = count_parameters(device)
-    local names = {}
-    for p = 1, count do
-        names[p] = device:parameter(p).name
-    end
-
-    local parameter_index = match_parameter(names, parameter_name)
+    local parameter_index = match_parameter(parameter_names(device), parameter_name)
     if (parameter_index) then
         selected_devices[row_number]["parameter_name"] = device:parameter(parameter_index).name
         selected_devices[row_number]["parameter_index"] = parameter_index
@@ -1832,48 +1837,20 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     -- bytes (no-op or corruption). Non-VST3 devices expose oversampling as a host
     -- parameter and are handled by the sibling/parameter paths below.
     if (device_name:sub(1, 5) == "VST3:" and entries and #entries > 0) then
-        local choices = core.osig_choices(norm)
-        if (not choices) then
-            local seen = {}
-            local labels = {}
-            for _, e in ipairs(entries) do
-                for lab in pairs(e.values) do
-                    if (not seen[lab]) then
-                        seen[lab] = true
-                        labels[#labels + 1] = lab
-                    end
-                end
-            end
-            table.sort(labels)
-            choices = {}
-            for i, l in ipairs(labels) do
-                choices[i] = { label = l, value = i }
-            end
-        end
-        show_osig_dropdown(row_number, device_name, device_instances, choices, parameter_name, nil, nil)
+        show_osig_dropdown(row_number, device_name, device_instances,
+            osig_choices_for(norm, entries), parameter_name, nil, nil)
         return
     end
     -- Fallback: borrow labels from a sibling device of the same plugin if present.
-    local sibling = find_sibling_device(device_name, parameter_name)
-    if (sibling) then
-        local scount = count_parameters(sibling)
-        local snames = {}
-        for p = 1, scount do
-            snames[p] = sibling:parameter(p).name
-        end
-        local sindex = match_parameter(snames, parameter_name)
-        if (sindex) then
-            -- The value is applied through the VST3 state-chunk signature, so a
-            -- signature must exist for this device and it must be a VST3 build. Without a
-            -- signature (or for an AU/VST2 build, which apply_osig_to_device_name refuses
-            -- to touch) Set cannot apply the selected target, so don't present osig controls.
-            local entries = osig[core.normalize_device_name(device_name)]
-            if (device_name:sub(1, 5) == "VST3:" and entries and #entries > 0) then
-                show_osig_dropdown(row_number, device_name, device_instances,
-                    parameter_choices(sibling:parameter(sindex)), parameter_name, sibling, sindex)
-                return
-            end
-        end
+    -- The value is applied through the VST3 state-chunk signature, so a signature
+    -- must exist for this device and it must be a VST3 build. Without a signature
+    -- (or for an AU/VST2 build, which apply_osig_to_device_name refuses to touch)
+    -- Set cannot apply the selected target, so don't present osig controls.
+    local sibling, sindex = resolve_sibling_parameter(device_name, parameter_name)
+    if (sibling and sindex and device_name:sub(1, 5) == "VST3:"
+        and entries and #entries > 0) then
+        show_osig_dropdown(row_number, device_name, device_instances,
+            parameter_choices(sibling:parameter(sindex)), parameter_name, sibling, sindex)
     end
     -- Neither a signature nor a sibling provides labels: nothing to drive.
 end
@@ -2310,14 +2287,7 @@ function extreme_values(extreme)
                 if (selected_devices[row_number]["osig_multi_axis"]) then
                     -- target_label is the combined "axis1 / axis2"; show axis1 in the
                     -- primary popup and let update_secondary place axis2 in the secondary.
-                    local a1, a2 = target_label, nil
-                    if (type(target_label) == "string") then
-                        local sep = target_label:find(SECONDARY_SEP, 1, true)
-                        if (sep) then
-                            a1 = target_label:sub(1, sep - 1)
-                            a2 = target_label:sub(sep + 3)
-                        end
-                    end
+                    local a1, a2 = split_target_label(target_label)
                     selected_devices[row_number]["osig_axis2_label"] = a2
                     if (choices) then
                         for i, c in ipairs(choices) do
@@ -2481,26 +2451,7 @@ local function apply_osig_to_device_name(device_name, target, state)
     end
     -- Prefer the device's explicit oversampling order (e.g. 2x before 16x); only fall
     -- back to alphabetical sorting when no natural order is defined.
-    local ordered
-    local oc = core.osig_choices(norm)
-    if (oc) then
-      ordered = {}
-      for _, c in ipairs(oc) do
-        ordered[#ordered + 1] = c.label
-      end
-    else
-      local labels = {}
-      for _, e in ipairs(entries) do
-        for lab in pairs(e.values) do
-          labels[lab] = true
-        end
-      end
-      ordered = {}
-      for lab in pairs(labels) do
-        ordered[#ordered + 1] = lab
-      end
-      table.sort(ordered)
-    end
+    local ordered = osig_label_order(norm, entries)
     if (cur) then
       for i, lab in ipairs(ordered) do
         if (lab == cur) then
