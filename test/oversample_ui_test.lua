@@ -508,4 +508,79 @@ function TestDialogLayout:test_only_newest_row_has_add_button()
     end
 end
 
+function TestDialogLayout:test_collect_device_names_dedupes_and_skips_inactive()
+    local collect = upvalue(oversample, "collect_device_names")
+    local function make_track(devices)
+        return {
+            devices = devices,
+            device = function(track, index) return track.devices[index] end,
+        }
+    end
+    local function device(name, active)
+        return { name = name, is_active = active }
+    end
+    local tracks = {
+        make_track({ device("A", true), device("A", true), device("B", false) }),
+        make_track({ device("C", true) }),
+    }
+    renoise.song = function()
+        return { tracks = tracks, track = function(song, index) return song.tracks[index] end }
+    end
+    lu.assertEquals(collect(), { "A", "C" })
+end
+
+function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
+    local merge = upvalue(load_tool_cache, "merge_cache_list")
+    local cached = upvalue(merge, "cached_parameters")
+    local list = {
+        size = 1,
+        [1] = core.encode_field("Device") .. core.encode_field("P1") .. core.encode_field("P2"),
+    }
+    merge(list)
+    lu.assertEquals(cached["Device"], { "P1", "P2" })
+end
+
+function TestDialogLayout:test_merge_name_list_dedupes_preserving_order()
+    local merge = upvalue(load_tool_cache, "merge_name_list")
+    local cached = upvalue(merge, "cached_device_names")
+    for i = #cached, 1, -1 do cached[i] = nil end
+    merge({ size = 3, [1] = "B", [2] = "A", [3] = "B" })
+    lu.assertEquals(cached, { "B", "A" })
+end
+
+function TestDialogLayout:test_refresh_device_popups_sorts_and_preserves_selection()
+    local names = upvalue(refresh_device_popups, "cached_device_names")
+    for i = #names, 1, -1 do names[i] = nil end
+    names[1], names[2], names[3] = "C", "A", "B"
+    local popup = self.views[self.ids.device_popup_id]
+    popup.items = { "B", "A" }
+    popup.value = 2
+    refresh_device_popups()
+    lu.assertEquals(popup.items, { "A", "B", "C" })
+    lu.assertEquals(popup.items[popup.value], "A")
+    lu.assertTrue(popup.active)
+end
+
+function TestDialogLayout:test_add_device_items_sorts_and_selects_index()
+    local names = upvalue(add_device_items, "cached_device_names")
+    for i = #names, 1, -1 do names[i] = nil end
+    names[1], names[2], names[3] = "C", "A", "B"
+    local popup = self.views[self.ids.device_popup_id]
+    add_device_items(self.ids.device_popup_id, 2)
+    lu.assertEquals(popup.items, { "A", "B", "C" })
+    lu.assertEquals(popup.value, 2)
+    lu.assertTrue(popup.active)
+end
+
+function TestDialogLayout:test_set_main_buttons_active_toggles_actions_and_rows()
+    set_main_buttons_active(false)
+    lu.assertFalse(self.views.set_values_button.active)
+    lu.assertFalse(self.views[self.ids.device_popup_id].active)
+    lu.assertFalse(self.views[self.ids.add_button_id].active)
+    set_main_buttons_active(true)
+    lu.assertTrue(self.views.set_values_button.active)
+    lu.assertTrue(self.views[self.ids.device_popup_id].active)
+    lu.assertTrue(self.views[self.ids.add_button_id].active)
+end
+
 os.exit(lu.LuaUnit.run())
