@@ -95,6 +95,30 @@ remains available even when High Quality is Off.
   the branch is not `main`. The only exception is this file, `AGENTS.md`,
   which is maintained on `main` in the `main` worktree.
 
+## PR review feedback
+
+After addressing review comments on a pull request, close the loop on the
+review itself, not just in the code:
+
+- **Resolve** every thread you actually fixed; leave threads you did not
+  address open for a human.
+- **Hide** (minimize) each addressed comment with the `resolved` classifier
+  so it stops cluttering the PR.
+- Only touch threads/comments you addressed; never resolve or hide ones you
+  left unresolved.
+
+Both need GraphQL node ids from `pullRequest.reviewThreads` (`PRRT_...` for
+the thread, `PRRC_...` for each comment):
+
+```bash
+gh api graphql -f query='{repository(owner:"OWNER",name:"REPO"){pullRequest(number:N){reviewThreads(first:50){nodes{id isResolved comments(first:5){nodes{id databaseId}}}}}}}'
+gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -f id=PRRT_...
+gh api graphql -f query='mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:RESOLVED}){minimizedComment{isMinimized}}}' -f id=PRRC_...
+```
+
+The automated PR Fixer already resolves the Copilot threads it fixes
+(`pr-fix.md` step 5); hiding is done by the agent or a human.
+
 ## Renoise ViewBuilder layout rules
 
 Detailed, load-on-demand. See the `renoise-viewbuilder-layout` skill
