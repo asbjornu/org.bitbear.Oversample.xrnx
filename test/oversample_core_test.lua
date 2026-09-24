@@ -741,7 +741,7 @@ end
 
 function TestKnownOsigFixtures:test_xml_detect_and_patch_preserves_bytes()
    local FILLER = 0xAB
-   for dev, entries in pairs(core.known_osig) do
+   for _, entries in pairs(core.known_osig) do
       local labels = {}
       for lab in pairs(entries[1].values) do labels[#labels + 1] = lab end
       local blob, maxpos = build_known_blob(entries, labels[1], FILLER)
