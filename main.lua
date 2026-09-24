@@ -5,7 +5,7 @@ Written by Bitbear
 https://bitbear.org/
 ============================================================================]]--
 
-require "Oversample/Oversample"
+local Oversample = require "Oversample/Oversample"
 require "Oversample/ProcessSlicer"
 
 --------------------------------------------------------------------------------
@@ -29,8 +29,8 @@ local options = renoise.Document.create("preferences") {
 
 renoise.tool().preferences = options
 
-oversample_init()
+Oversample.oversample_init()
 renoise.tool():add_menu_entry {
   name = "Main Menu:Tools:Oversample",
-  invoke = oversample
+  invoke = Oversample.oversample
 }

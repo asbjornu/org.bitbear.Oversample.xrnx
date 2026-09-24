@@ -12,6 +12,20 @@ local known_secondary = core.known_secondary
 local nearest_choice_index = core.nearest_choice_index
 local same_name_set = core.same_name_set
 
+-- Every function below is a module-local. These forward declarations exist only
+-- so mutually recursive helpers can be referenced before they are defined; the
+-- definitions use `function name(...)` and assign to the local.
+local load_tool_cache, save_tool_cache, save_global_cache
+local save_global_device_name_cache, save_global_osig, prune_parameter_cache
+local on_device_preset_changed, oversample_on_new_song, oversample_init
+local oversample, destroy, create_settings_row, render_settings_rows
+local add_device_items_init, add_device_items, refresh_device_popups
+local add_rows_for_new_known_devices, update_secondary, device_selected
+local parameter_selected, parameter_value_changed, enumerate_tracks
+local enumerate_devices, get_parameters, count_parameters
+local enumerate_parameters, extreme_values, set_main_buttons_active
+local set_values
+
 local vb = renoise.ViewBuilder()
 local DEFAULT_CONTROL_SPACING = renoise.ViewBuilder.DEFAULT_CONTROL_SPACING
 local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
@@ -2576,3 +2590,24 @@ function set_values()
     vb.views.status.text = parameters_changed .. ' parameter values set.'
     set_main_buttons_active(true)
 end
+
+-- Public API consumed by main.lua.
+local Oversample = {
+    oversample_init = oversample_init,
+    oversample = oversample,
+}
+
+-- White-box surface driven directly by test/oversample_ui_test.lua.
+Oversample.destroy = destroy
+Oversample.load_tool_cache = load_tool_cache
+Oversample.save_tool_cache = save_tool_cache
+Oversample.create_settings_row = create_settings_row
+Oversample.update_secondary = update_secondary
+Oversample.device_selected = device_selected
+Oversample.parameter_selected = parameter_selected
+Oversample.refresh_device_popups = refresh_device_popups
+Oversample.add_device_items = add_device_items
+Oversample.set_main_buttons_active = set_main_buttons_active
+Oversample.set_values = set_values
+
+return Oversample
