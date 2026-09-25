@@ -155,7 +155,7 @@ core.known_osig_order = {
 -- (caller should fall back to its own label collection / sorting).
 function core.osig_choices(norm)
    local order = core.known_osig_order[norm]
-   if (not order) then
+   if not order then
       return nil
    end
    local choices = {}
@@ -205,7 +205,7 @@ function core.normalize_device_name(name)
    name = tostring(name)
    local prefixes = { "VST3:", "VST:", "AU:", "DX:", "CLAP:", "LV2:" }
    for _, p in ipairs(prefixes) do
-      if (name:sub(1, #p) == p) then
+      if name:sub(1, #p) == p then
          return name:sub(#p + 1):gsub("^%s+", "")
       end
    end
@@ -215,7 +215,7 @@ end
 function core.known_primary(device_name)
     local norm = core.normalize_device_name(device_name)
     local kp = core.known_devices_parameters[norm]
-    if (not kp) then
+    if not kp then
        return nil
     end
     -- VST3 builds expose no host oversampling parameter; a VST3 device is only supported
@@ -224,14 +224,14 @@ function core.known_primary(device_name)
     -- apply_parameter_value could find neither a host parameter nor a chunk signature,
     -- leaving an inactive row Set cannot apply. Non-VST3 builds may still expose the host
     -- parameter (and are unaffected by this gate).
-    if (device_name:sub(1, 5) == "VST3:" and not core.known_osig[norm]) then
+    if device_name:sub(1, 5) == "VST3:" and not core.known_osig[norm] then
        return nil
     end
-    if (type(kp) == "string") then
+    if type(kp) == "string" then
        return kp
     end
-    if (type(kp) == "table") then
-       if (kp.primary) then
+    if type(kp) == "table" then
+       if kp.primary then
           return kp.primary
        end
        return kp[1]
@@ -246,11 +246,11 @@ end
 
 function core.known_secondary(device_name)
    local kp = core.known_devices_parameters[core.normalize_device_name(device_name)]
-   if (type(kp) == "table") then
-      if (kp.secondary) then
+   if type(kp) == "table" then
+      if kp.secondary then
          return kp.secondary.name
       end
-      if (kp[2]) then
+      if kp[2] then
          return kp[2]
       end
    end
@@ -284,38 +284,38 @@ end
 -- or parameter names may themselves contain ';' without breaking the encoding.
 
 function core.encode_field(str)
-   return string.len(str) .. ";" .. str
+   return str:len() .. ";" .. str
 end
 
 function core.decode_fields(str)
-    if (type(str) ~= "string") then
+    if type(str) ~= "string" then
         return {}
     end
     local fields = {}
     local i = 1
-    local len = string.len(str)
-   while (i <= len) do
-      local sep = string.find(str, ";", i, true)
-      if (not sep) then
+    local len = str:len()
+   while i <= len do
+      local sep = str:find(";", i, true)
+      if not sep then
          -- A valid field is always "len;data"; a missing separator on remaining content
          -- means a trailing unframed suffix, so the record is malformed. Reject it whole
          -- rather than accepting a partial prefix that could override the valid cache.
          return {}
       end
-      local field_len = tonumber(string.sub(str, i, sep - 1))
+      local field_len = tonumber(str:sub(i, sep - 1))
       -- A length that is missing, not a whole number, or negative would either drop the
       -- field's data or (for a negative length) reset the cursor to the semicolon and hang
       -- the loader. A field that runs past the end of the string is truncated. In all of
       -- these cases the cached entry is malformed, so refuse to decode it rather than risk
       -- a hang or partial data being merged.
-      if (field_len == nil or field_len ~= math.floor(field_len) or field_len < 0) then
+      if field_len == nil or field_len ~= math.floor(field_len) or field_len < 0 then
          return {}
       end
       local field_end = sep + field_len
-      if (field_end > len) then
+      if field_end > len then
          return {}
       end
-      table.insert(fields, string.sub(str, sep + 1, field_end))
+      table.insert(fields, str:sub(sep + 1, field_end))
       i = field_end + 1
    end
    return fields
@@ -333,17 +333,17 @@ function core.match_parameter(names, target)
    local tl = tostring(target):lower():match("^%s*(.-)%s*$")
 
    for i, n in ipairs(names) do
-      if (n == target) then
+      if n == target then
          return i
       end
    end
    for i, n in ipairs(names) do
-      if (tostring(n):lower():match("^%s*(.-)%s*$") == tl) then
+      if tostring(n):lower():match("^%s*(.-)%s*$") == tl then
          return i
       end
    end
    for i, n in ipairs(names) do
-      if (tostring(n):lower():find(tl, 1, true)) then
+      if tostring(n):lower():find(tl, 1, true) then
          return i
       end
    end
@@ -355,11 +355,11 @@ end
 -- True when two lists contain the same set of names, ignoring order.
 
 function core.same_name_set(a, b)
-   if (#a ~= #b) then return false end
+   if #a ~= #b then return false end
    local seen = {}
    for _, v in ipairs(a) do seen[v] = true end
    for _, v in ipairs(b) do
-      if (not seen[v]) then return false end
+      if not seen[v] then return false end
    end
    return true
 end
@@ -371,7 +371,7 @@ end
 
 function core.collect_device_items(devices, cached_device_names)
    local device_items = {}
-   if (next(devices) ~= nil) then
+   if next(devices) ~= nil then
       for k, _ in pairs(devices) do
          device_items[#device_items + 1] = k
       end
@@ -390,9 +390,9 @@ end
 -- back to the already-known `parameter_index` when the name is absent.
 
 function core.resolve_parameter_index(parameter_names, parameter_name, parameter_index)
-   if (parameter_name) then
+   if parameter_name then
       for p = 1, #parameter_names do
-         if (parameter_names[p] == parameter_name) then
+         if parameter_names[p] == parameter_name then
             return p
          end
       end
@@ -414,7 +414,7 @@ function core.nearest_choice_index(choices, value)
    local best = math.huge
    for i, c in ipairs(choices) do
       local d = math.abs((c.value or 0) - value)
-      if (d < best) then
+      if d < best then
          best = d
          idx = i
       end
@@ -441,29 +441,29 @@ function core.resolve_target_indices(parameter_names, device_name, selected)
    local count = #parameter_names
 
    local function add(idx)
-      if (idx and idx >= 1 and idx <= count and not seen[idx]) then
+      if idx and idx >= 1 and idx <= count and not seen[idx] then
          seen[idx] = true
          targets[#targets + 1] = idx
       end
    end
 
    local function add_by_name(name)
-      if (name) then
+      if name then
          local i = core.match_parameter(parameter_names, name)
-         if (i) then add(i) end
+         if i then add(i) end
       end
    end
 
    add_by_name(core.known_primary(device_name))
    add_by_name(core.known_secondary(device_name))
 
-   if (selected and selected.parameter_name) then
+   if selected and selected.parameter_name then
       add_by_name(selected.parameter_name)
    else
       add(selected and selected.parameter_index)
    end
 
-   if (selected and selected.secondary_parameter_name) then
+   if selected and selected.secondary_parameter_name then
       add_by_name(selected.secondary_parameter_name)
    else
       add(selected and selected.secondary_parameter_index)
@@ -495,29 +495,29 @@ end
 -- arrays (labels[k] is the label for blobs[k]). Returns the entries table.
 function core.diff_blobs_multi(blobs, labels)
    local entries = {}
-   if (not blobs or #blobs < 2 or #blobs ~= #labels) then
+   if not blobs or #blobs < 2 or #blobs ~= #labels then
       return entries
    end
-   local n = string.len(blobs[1])
+   local n = blobs[1]:len()
    for k = 2, #blobs do
-      local m = string.len(blobs[k])
-      if (m < n) then
+      local m = blobs[k]:len()
+      if m < n then
          n = m
       end
    end
    for i = 1, n do
-      local first = string.byte(blobs[1], i)
+      local first = blobs[1]:byte(i)
       local vary = false
       for k = 2, #blobs do
-         if (string.byte(blobs[k], i) ~= first) then
+         if blobs[k]:byte(i) ~= first then
             vary = true
             break
          end
       end
-      if (vary) then
+      if vary then
          local values = {}
          for k = 1, #blobs do
-            values[labels[k]] = string.byte(blobs[k], i)
+            values[labels[k]] = blobs[k]:byte(i)
          end
          entries[#entries + 1] = { pos = i, values = values }
       end
@@ -529,20 +529,20 @@ end
 -- `target` (a label string). Positions whose `target` value is unknown, or that
 -- lie outside the current blob, are left untouched.
 function core.patch_blob(blob, entries, target)
-   if (not blob or not entries or #entries == 0) then
+   if not blob or not entries or #entries == 0 then
       return blob
    end
-   local n = string.len(blob)
+   local n = blob:len()
    -- Collect only the (position, byte) pairs that actually change, keyed by position.
    local patches = {}
    for _, e in ipairs(entries) do
       local b = e.values[target]
-      if (b ~= nil and e.pos >= 1 and e.pos <= n) then
+      if b ~= nil and e.pos >= 1 and e.pos <= n then
          patches[e.pos] = b
       end
    end
    -- Nothing to change: return the original blob without copying it byte-by-byte.
-   if (not next(patches)) then
+   if not next(patches) then
       return blob
    end
    -- Splice the original blob around the changed offsets instead of rebuilding it,
@@ -553,14 +553,14 @@ function core.patch_blob(blob, entries, target)
    local out = {}
    local prev = 0
    for _, pos in ipairs(positions) do
-      if (pos > prev + 1) then
-         out[#out + 1] = string.sub(blob, prev + 1, pos - 1)
+      if pos > prev + 1 then
+         out[#out + 1] = blob:sub(prev + 1, pos - 1)
       end
       out[#out + 1] = string.char(patches[pos])
       prev = pos
    end
-   if (prev < n) then
-      out[#out + 1] = string.sub(blob, prev + 1, n)
+   if prev < n then
+      out[#out + 1] = blob:sub(prev + 1, n)
    end
    return table.concat(out)
 end
@@ -568,10 +568,10 @@ end
 -- Best-matching label for the current blob: the label whose recorded bytes match
 -- the most learned positions. Returns nil when nothing matches (or no entries).
 function core.detect_label(blob, entries)
-   if (not blob or not entries or #entries == 0) then
+   if not blob or not entries or #entries == 0 then
       return nil
    end
-   local n = string.len(blob)
+   local n = blob:len()
    -- Collect the distinct labels in a sorted list so ties are broken deterministically
    -- (hash iteration order is undefined in Lua 5.1/JIT and would otherwise make the
    -- chosen label vary between runs, destabilising UI display and toggle behaviour).
@@ -579,7 +579,7 @@ function core.detect_label(blob, entries)
    local label_list = {}
    for _, e in ipairs(entries) do
       for lab in pairs(e.values) do
-         if (not label_set[lab]) then
+         if not label_set[lab] then
             label_set[lab] = true
             label_list[#label_list + 1] = lab
          end
@@ -592,9 +592,9 @@ function core.detect_label(blob, entries)
       local defined = 0
       for _, e in ipairs(entries) do
          local b = e.values[lab]
-         if (b ~= nil) then
+         if b ~= nil then
             defined = defined + 1
-            if (e.pos >= 1 and e.pos <= n and string.byte(blob, e.pos) == b) then
+            if e.pos >= 1 and e.pos <= n and blob:byte(e.pos) == b then
                score = score + 1
             end
          end
@@ -604,7 +604,7 @@ function core.detect_label(blob, entries)
       -- missing at some position) would otherwise match on its single present byte and
       -- patch_blob would apply a target using only that subset of offsets, defeating the
       -- fail-closed protection. Ties are broken deterministically by the sorted label order.
-      if (defined == #entries and score == defined and defined > best_defined) then
+      if defined == #entries and score == defined and defined > best_defined then
          best_defined = defined
          best = lab
       end
@@ -616,51 +616,51 @@ end
 local B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 local function b64_val(c)
-   if (c == nil) then return -1 end
-   if (c >= 65 and c <= 90) then return c - 65 end
-   if (c >= 97 and c <= 122) then return c - 71 end
-   if (c >= 48 and c <= 57) then return c + 4 end
-   if (c == 43) then return 62 end
-   if (c == 47) then return 63 end
+   if c == nil then return -1 end
+   if c >= 65 and c <= 90 then return c - 65 end
+   if c >= 97 and c <= 122 then return c - 71 end
+   if c >= 48 and c <= 57 then return c + 4 end
+   if c == 43 then return 62 end
+   if c == 47 then return 63 end
    return -1
 end
 
 function core.b64decode(s)
-   if (type(s) ~= "string") then return nil end
-   s = string.gsub(s, "%s+", "")
-   local n = string.len(s)
+   if type(s) ~= "string" then return nil end
+   s = s:gsub("%s+", "")
+   local n = s:len()
    -- A valid base64 string is a multiple of four characters. Anything else (stray
    -- characters, wrong length) is not a VST3 chunk, so reject it rather than silently
    -- mapping bad characters to zero and producing a blob detect_label_xml could accept.
-   if (n % 4 ~= 0) then return nil end
-   if (n == 0) then return "" end
+   if n % 4 ~= 0 then return nil end
+   if n == 0 then return "" end
    local out = {}
    local i = 1
-   while (i <= n) do
+   while i <= n do
       local acc = 0
       local pads = 0
       for k = 0, 3 do
-         local ch = string.sub(s, i + k, i + k)
-         if (ch == "=") then
+         local ch = s:sub(i + k, i + k)
+         if ch == "=" then
             -- Padding still occupies its 6-bit slot (value 0); only the output bytes are
             -- suppressed, so the accumulator must still shift.
             pads = pads + 1
             acc = acc * 64
-         elseif (pads > 0) then
+         elseif pads > 0 then
             -- Padding must be contiguous at the end of the quartet.
             return nil
          else
-            local cv = b64_val(string.byte(ch))
-            if (cv < 0) then return nil end
+            local cv = b64_val(ch:byte())
+            if cv < 0 then return nil end
             acc = acc * 64 + cv
          end
       end
       -- Padding is only legal in the final quartet, and at most two "=" signs.
-      if (pads > 0 and i + 3 < n) then return nil end
-      if (pads > 2) then return nil end
+      if pads > 0 and i + 3 < n then return nil end
+      if pads > 2 then return nil end
       out[#out + 1] = string.char(math.floor(acc / 65536) % 256)
-      if (pads < 2) then out[#out + 1] = string.char(math.floor(acc / 256) % 256) end
-      if (pads < 1) then out[#out + 1] = string.char(acc % 256) end
+      if pads < 2 then out[#out + 1] = string.char(math.floor(acc / 256) % 256) end
+      if pads < 1 then out[#out + 1] = string.char(acc % 256) end
       i = i + 4
    end
    return table.concat(out)
@@ -669,11 +669,11 @@ end
 function core.b64encode(s)
    local out = {}
    local i = 1
-   local n = string.len(s)
-   while (i <= n) do
-      local b1 = string.byte(s, i); i = i + 1
-      local b2 = (i <= n) and string.byte(s, i) or 0; i = i + 1
-      local b3 = (i <= n) and string.byte(s, i) or 0; i = i + 1
+   local n = s:len()
+   while i <= n do
+      local b1 = s:byte(i); i = i + 1
+      local b2 = (i <= n) and s:byte(i) or 0; i = i + 1
+      local b3 = (i <= n) and s:byte(i) or 0; i = i + 1
       local v = b1 * 65536 + b2 * 256 + b3
       out[#out + 1] = B64_ALPHABET:sub(math.floor(v / 262144) % 64 + 1, math.floor(v / 262144) % 64 + 1)
       out[#out + 1] = B64_ALPHABET:sub(math.floor(v / 4096) % 64 + 1, math.floor(v / 4096) % 64 + 1)
@@ -681,8 +681,8 @@ function core.b64encode(s)
       out[#out + 1] = B64_ALPHABET:sub(v % 64 + 1, v % 64 + 1)
    end
    local rem = n % 3
-   if (rem == 1) then out[#out] = "="; out[#out - 1] = "=" end
-   if (rem == 2) then out[#out] = "=" end
+   if rem == 1 then out[#out] = "="; out[#out - 1] = "=" end
+   if rem == 2 then out[#out] = "=" end
    return table.concat(out)
 end
 
@@ -692,28 +692,28 @@ end
 -- stays valid XML. These helpers do exactly that.
 
 function core.patch_osig_xml(xml, entries, target)
-   local b64 = string.match(xml, "<ParameterChunk><!%[CDATA%[([%s%S]-)%]%]></ParameterChunk>")
-   if (not b64) then return nil end
+   local b64 = xml:match("<ParameterChunk><!%[CDATA%[([%s%S]-)%]%]></ParameterChunk>")
+   if not b64 then return nil end
    local bin = core.b64decode(b64)
-   if (not bin or string.len(bin) == 0) then return nil end
+   if not bin or bin:len() == 0 then return nil end
    local newbin = core.patch_blob(bin, entries, target)
-   if (not newbin or newbin == bin) then return nil end
+   if not newbin or newbin == bin then return nil end
    local newb64 = core.b64encode(newbin)
-   return (string.gsub(xml, "<ParameterChunk><!%[CDATA%[[%s%S]-%]%]></ParameterChunk>",
+   return (xml:gsub("<ParameterChunk><!%[CDATA%[[%s%S]-%]%]></ParameterChunk>",
       "<ParameterChunk><![CDATA[" .. newb64 .. "]]></ParameterChunk>", 1))
 end
 
 function core.detect_label_xml(xml, entries)
-   local b64 = string.match(xml, "<ParameterChunk><!%[CDATA%[([%s%S]-)%]%]></ParameterChunk>")
-   if (not b64) then return nil end
+   local b64 = xml:match("<ParameterChunk><!%[CDATA%[([%s%S]-)%]%]></ParameterChunk>")
+   if not b64 then return nil end
    local bin = core.b64decode(b64)
-   if (not bin or string.len(bin) == 0) then return nil end
+   if not bin or bin:len() == 0 then return nil end
    return core.detect_label(bin, entries)
 end
 
 -- The first label found in `entries`, used as a sensible default target.
 function core.first_label(entries)
-   if (not entries or #entries == 0) then
+   if not entries or #entries == 0 then
       return nil
    end
    return next(entries[1].values) or nil
@@ -747,7 +747,7 @@ end
 -- Inverse of encode_osig.
 function core.decode_osig(str)
    local entries = {}
-   if (not str or str == "") then
+   if not str or str == "" then
       return entries
    end
     local fields = core.decode_fields(str)
@@ -757,12 +757,12 @@ function core.decode_osig(str)
        -- The inner record is base64 (XML-safe); a field that is not valid base64 is malformed.
        local inner = core.b64decode(f)
        local accepted = false
-       if (inner) then
+       if inner then
           local parts = {}
-          for p in string.gmatch(inner, "[^%z]+") do
+          for p in inner:gmatch("[^%z]+") do
              parts[#parts + 1] = p
           end
-          if (#parts >= 3 and (#parts % 2) == 1) then
+          if #parts >= 3 and (#parts % 2) == 1 then
              local pos = tonumber(parts[1])
              local values = {}
              local ok = true
@@ -770,32 +770,32 @@ function core.decode_osig(str)
              -- offset math in patch_blob. Bytes must be integers in 0..255 so they pass
              -- cleanly to string.char (a malformed cached entry like byte 999 would otherwise
              -- raise mid-Set instead of being ignored).
-             if (not pos or pos ~= math.floor(pos) or pos < 1) then
+             if not pos or pos ~= math.floor(pos) or pos < 1 then
                 ok = false
              end
              local seen_label = {}
              for i = 2, #parts, 2 do
                 local lab = parts[i]
                 local byte = tonumber(parts[i + 1])
-                if (byte == nil or byte ~= math.floor(byte) or byte < 0 or byte > 255) then
+                if byte == nil or byte ~= math.floor(byte) or byte < 0 or byte > 255 then
                    ok = false
                    break
                 end
                 -- A label repeated within one entry is a contradictory record; reject it rather
                 -- than letting the last value silently win.
-                if (seen_label[lab]) then
+                if seen_label[lab] then
                    ok = false
                    break
                 end
                 seen_label[lab] = true
                 values[lab] = byte
              end
-             if (ok) then
+             if ok then
                 -- patch_blob collapses duplicate positions with patches[e.pos] = b, so two
                 -- entries for the same offset that disagree would let Set write a byte
                 -- combination matching no learned label. Reject any repeated position: leave
                 -- accepted false so the whole signature is rejected below.
-                if (not seen_pos[pos]) then
+                if not seen_pos[pos] then
                    seen_pos[pos] = true
                    entries[#entries + 1] = { pos = pos, values = values }
                    accepted = true
@@ -806,11 +806,11 @@ function core.decode_osig(str)
        -- A single malformed field poisons the whole signature: discarding it and keeping the
        -- surviving offsets would let detect_label/patch_blob still match and rewrite at those
        -- offsets, producing a hybrid chunk instead of failing closed. Reject the entire record.
-       if (not accepted) then
+       if not accepted then
           malformed = true
        end
     end
-    if (malformed) then
+    if malformed then
        return {}
    end
     -- Fail closed on incomplete label coverage: every learned position must declare the
@@ -819,7 +819,7 @@ function core.decode_osig(str)
     -- bytes for the current state while patch_blob silently skips the missing positions for
     -- the requested target, producing a hybrid chunk that rewrites part of an unrelated state.
     -- Reject such signatures entirely rather than storing a partial one in osig.
-    if (#entries >= 2) then
+    if #entries >= 2 then
        local ref = {}
        for lab in pairs(entries[1].values) do ref[lab] = true end
        local ref_count = 0
@@ -829,9 +829,9 @@ function core.decode_osig(str)
           local consistent = true
           for lab in pairs(entries[i].values) do
              count = count + 1
-             if (not ref[lab]) then consistent = false end
+             if not ref[lab] then consistent = false end
           end
-          if (not consistent or count ~= ref_count) then
+          if not consistent or count ~= ref_count then
              return {}
           end
        end
