@@ -19,6 +19,12 @@ local function upvalue(fn, wanted)
     end
 end
 
+-- The mutable runtime state is owned by Oversample/state.lua and injected into
+-- every module, so white-box tests reach it through the `state` upvalue.
+local function state_of(fn)
+    return upvalue(fn, "state")
+end
+
 TestDialogLayout = {}
 
 function TestDialogLayout:setUp()
@@ -128,7 +134,8 @@ function TestDialogLayout:setUp()
     self.secondary = self.views[self.ids.parameter_value_secondary_popup_id]
     self.secondary_label = self.views[self.ids.parameter_value_secondary_label_id]
     self.footer = self.root.views[1].views[4]
-    self.selected = upvalue(update_secondary, "selected_devices")
+    self.state = state_of(update_secondary)
+    self.selected = self.state.selected_devices
 end
 
 function TestDialogLayout:tearDown()
@@ -231,7 +238,7 @@ function TestDialogLayout:test_primary_switches_never_temporarily_expand_row()
         lu.assertTrue(self.row.width <= width, "Transient row expansion")
     end
     local apply = upvalue(upvalue(parameter_selected, "set_value_control"), "apply_value_to_control")
-    local cache = upvalue(upvalue(apply, "parameter_choices"), "parameter_choices_cache")
+    local cache = state_of(upvalue(apply, "parameter_choices")).parameter_choices_cache
     local parameter = {name = "Oversampling", value_min = 0, value_max = 1,
         value_quantum = 0, value = 0}
     local device = {parameter = function() return parameter end}
@@ -283,8 +290,8 @@ function TestDialogLayout:test_osig_set_patches_vst3_binary_chunk()
    -- Drive the "Set" path for a VST3 device whose oversampling is chunk-driven
    -- (no host parameter). The learned bytes must be written into active_preset_data.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
-   local osig = upvalue(apply, "osig")
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local osig = state_of(apply).osig
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -302,8 +309,8 @@ function TestDialogLayout:test_osig_set_patches_vst3_xml_chunk()
    -- VST3 hosts wrap the chunk in base64 inside <ParameterChunk><![CDATA[…]]></ParameterChunk>;
    -- the Set path must decode, patch, and re-encode the binary, not corrupt the XML.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
-   local osig = upvalue(apply, "osig")
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local osig = state_of(apply).osig
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -323,8 +330,8 @@ function TestDialogLayout:test_osig_set_without_target_toggles_to_next_label()
    -- A row with no explicit target uses the cyclic "toggle": detect current state
    -- ("Off") and step to the next label in sorted order ("2x").
    local apply = upvalue(set_values, "apply_osig_to_device_name")
-   local osig = upvalue(apply, "osig")
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local osig = state_of(apply).osig
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -340,7 +347,7 @@ end
 
 function TestDialogLayout:test_osig_set_skips_non_vst3_device()
    -- The chunk-signature path is VST3-only; a VST2 build must be left untouched.
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local off = string.char(0, 1, 2, 3, 4)
    local device_name = "VST: FabFilter: Pro-C 2"
    local device = { active_preset_data = off }
@@ -376,8 +383,8 @@ function TestDialogLayout:test_osig_set_toggle_uses_natural_order()
    -- Pro-L 2 natural order is Off, 2x, 4x, 8x, 16x, 32x. Alphabetical sorting would step
    -- Off -> 16x (wrong); the natural order must step Off -> 2x.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
-   local osig = upvalue(apply, "osig")
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local osig = state_of(apply).osig
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local norm = "FabFilter: Pro-L 2"
    local blobs, labels = {}, { "Off", "2x", "4x", "8x", "16x", "32x" }
    for i = 1, #labels do blobs[i] = string.char(0, i, 0, 0, 0) end
@@ -396,8 +403,8 @@ function TestDialogLayout:test_apply_parameter_value_clears_stale_multi_axis_sta
    -- clear the stale osig_multi_axis / osig_axes state, or single-axis labels would be
    -- treated as combined "axis1 / axis2" keys.
    local app = upvalue(device_selected, "apply_parameter_value")
-   local osig = upvalue(app, "osig")
-   local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+   local osig = state_of(app).osig
+   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
    local sig = { { pos = 1, values = { ["Off"] = 0, ["2x"] = 1 } } }
    osig["FabFilter: Saturn 2"] = sig
    osig["FabFilter: Pro-Q 3"] = sig
@@ -444,8 +451,8 @@ function TestDialogLayout:test_apply_osig_to_device_name_is_fail_closed_on_unrec
     -- When the device's current VST3 chunk matches no learned byte, Set must leave the
     -- chunk untouched (fail closed) rather than overwriting it with a guessed patch.
     local apply = upvalue(set_values, "apply_osig_to_device_name")
-    local osig = upvalue(apply, "osig")
-    local devices = upvalue(upvalue(set_values, "ensure_device_instances"), "devices")
+    local osig = state_of(apply).osig
+    local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
     local norm = "FabFilter: Pro-C 2"
     local off = string.char(0, 1, 2, 3, 4)
     local two = string.char(0, 1, 9, 3, 9)
@@ -493,7 +500,7 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
     }
     -- parameter_choices caches by (name, range); clear any entry left by an earlier test so
     -- the sibling is actually probed (otherwise a stale 3-choice cache would be reused).
-    local cache = upvalue(upvalue(upd, "parameter_choices"), "parameter_choices_cache")
+    local cache = state_of(upvalue(upd, "parameter_choices")).parameter_choices_cache
     for k in pairs(cache) do cache[k] = nil end
     upd(1, "VST3: FabFilter: Pro-Q 3", { { active_preset_data = "" } })
     lu.assertEquals(self.selected[1].osig_target_label_sec, "Maximum")
@@ -504,7 +511,7 @@ function TestDialogLayout:test_merge_osig_list_normalizes_cached_name()
    -- (e.g. "VST3: FabFilter: ..."); merge must normalize the key so lookups via
    -- osig[core.normalize_device_name(...)] can still find them.
    local merge = upvalue(load_tool_cache, "merge_osig_list")
-   local osig = upvalue(merge, "osig")
+   local osig = state_of(merge).osig
    local raw = "VST3: Acme: Compressor"
    local list = {
       size = 1,
@@ -556,7 +563,7 @@ end
 
 function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
     local merge = upvalue(load_tool_cache, "merge_cache_list")
-    local cached = upvalue(merge, "cached_parameters")
+    local cached = state_of(merge).cached_parameters
     local list = {
         size = 1,
         [1] = core.encode_field("Device") .. core.encode_field("P1") .. core.encode_field("P2"),
@@ -567,14 +574,14 @@ end
 
 function TestDialogLayout:test_merge_name_list_dedupes_preserving_order()
     local merge = upvalue(load_tool_cache, "merge_name_list")
-    local cached = upvalue(merge, "cached_device_names")
+    local cached = state_of(merge).cached_device_names
     for i = #cached, 1, -1 do cached[i] = nil end
     merge({ size = 3, [1] = "B", [2] = "A", [3] = "B" })
     lu.assertEquals(cached, { "B", "A" })
 end
 
 function TestDialogLayout:test_refresh_device_popups_sorts_and_preserves_selection()
-    local names = upvalue(refresh_device_popups, "cached_device_names")
+    local names = state_of(refresh_device_popups).cached_device_names
     for i = #names, 1, -1 do names[i] = nil end
     names[1], names[2], names[3] = "C", "A", "B"
     local popup = self.views[self.ids.device_popup_id]
@@ -587,7 +594,7 @@ function TestDialogLayout:test_refresh_device_popups_sorts_and_preserves_selecti
 end
 
 function TestDialogLayout:test_add_device_items_sorts_and_selects_index()
-    local names = upvalue(add_device_items, "cached_device_names")
+    local names = state_of(add_device_items).cached_device_names
     for i = #names, 1, -1 do names[i] = nil end
     names[1], names[2], names[3] = "C", "A", "B"
     local popup = self.views[self.ids.device_popup_id]

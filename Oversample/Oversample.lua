@@ -9,6 +9,9 @@ local known_secondary = core.known_secondary
 local nearest_choice_index = core.nearest_choice_index
 local same_name_set = core.same_name_set
 
+-- All mutable runtime state lives in one injected table (see Oversample/state.lua).
+local state = require("Oversample/state")(renoise)
+
 -- Every function below is a module-local. These forward declarations exist only
 -- so mutually recursive helpers can be referenced before they are defined; the
 -- definitions use `function name(...)` and assign to the local.
@@ -127,35 +130,27 @@ local SECONDARY_LABEL_WIDTH = tight_text_width(_secondary_labels)
 local SECONDARY_POPUP_WIDTH = max_text_width(_secondary_values)
 local SETTINGS_WIDTH = COLUMN_WIDTH + PARAMETER_WIDTH + VALUE_WIDTH
     + SECONDARY_LABEL_WIDTH + SECONDARY_POPUP_WIDTH + 16 + 5 * DEFAULT_CONTROL_SPACING
-local dialog = nil
-local devices = {}
-local devices_valid = false
-local settings_row_count = 0
 -- The dialog historically called this with no argument, meaning "the current row
 -- count". The pure core builder requires a row number, so supply the default here.
 local function create_settings_row_identifiers(row_number)
-   return core.create_settings_row_identifiers(row_number or settings_row_count)
+   return core.create_settings_row_identifiers(row_number or state.settings_row_count)
 end
-local selected_devices = {}
 
 -- Tracks in-flight per-device parameter scans so the status text only reports
 -- "Done." once every background scan has actually finished (each row's default
 -- device triggers its own asynchronous enumeration via ProcessSlicer).
-local pending_parameter_scans = 0
-local device_scan_count = 0
-local device_scan_total = 0
 local function mark_parameter_scan_started()
-    pending_parameter_scans = pending_parameter_scans + 1
-    vb.views.status.text = string.format('Finding parameters... (%d)', pending_parameter_scans)
+    state.pending_parameter_scans = state.pending_parameter_scans + 1
+    vb.views.status.text = string.format('Finding parameters... (%d)', state.pending_parameter_scans)
 end
 local function mark_parameter_scan_finished()
-    if pending_parameter_scans > 0 then
-        pending_parameter_scans = pending_parameter_scans - 1
+    if state.pending_parameter_scans > 0 then
+        state.pending_parameter_scans = state.pending_parameter_scans - 1
     end
-    if pending_parameter_scans == 0 then
+    if state.pending_parameter_scans == 0 then
         vb.views.status.text = 'Done.'
     else
-        vb.views.status.text = string.format('Finding parameters... (%d)', pending_parameter_scans)
+        vb.views.status.text = string.format('Finding parameters... (%d)', state.pending_parameter_scans)
     end
 end
 
@@ -179,34 +174,9 @@ end
 -- that device/parameter names might contain.
 -- encode_field / decode_fields are provided by the core module.
 
--- In-memory mirror of the cache: [device_name] -> { parameter_name, ... }
-local cached_parameters = {}
-
--- In-memory, ordered list of device names discovered in the current song.
--- Persisted (per-song and machine-wide) so the device dropdown can be shown
--- instantly on open without re-walking every track/device in the project.
-local cached_device_names = {}
-
--- In-memory oversampling state-chunk signatures, keyed by device name (plugin
--- type). Each value is an entries array (see oversample_core.diff_blobs_multi): a
--- list of { pos, values = { [label] = byte } }. Populated by the calibration dialog
--- and used as a fallback when a plugin does not expose its oversampling as a host
--- parameter (e.g. FabFilter VST3).
-local osig = {}
-
--- Combined per-song cache document, stored in renoise.song().tool_data (the
--- portable copy that travels with the .xrns file).
-local tool_cache_doc = renoise.Document.create("OversampleCache") {
-  parameters = renoise.Document.ObservableStringList(),
-  device_names = renoise.Document.ObservableStringList(),
-  osig = renoise.Document.ObservableStringList()
-}
-
--- *_dirty flags mark what still needs persisting.
-local cache_dirty = false
-local global_cache_dirty = false
-local device_names_dirty = false
-local global_device_names_dirty = false
+-- The in-memory mirrors of the persisted caches, the combined per-song cache
+-- document, and the *_dirty flags that mark what still needs persisting all live
+-- in the shared state table (see Oversample/state.lua).
 
 -- Count elements of a renoise.Document ObservableList. Observable lists expose
 -- their length through the :size() method; plain Lua tables (the in-memory
@@ -250,7 +220,7 @@ local function merge_cache_list(list)
         for p = 2, #fields do
           params[p - 1] = fields[p]
         end
-        cached_parameters[name] = params
+        state.cached_parameters[name] = params
       end
     end
   end
@@ -261,10 +231,10 @@ local function merge_name_list(list)
   for i = 1, list_count(list) do
     local name = tostring(list[i])
     local seen = false
-    for _, v in ipairs(cached_device_names) do
+    for _, v in ipairs(state.cached_device_names) do
       if v == name then seen = true; break end
     end
-    if not seen then cached_device_names[#cached_device_names + 1] = name end
+    if not seen then state.cached_device_names[#state.cached_device_names + 1] = name end
   end
 end
 
@@ -291,7 +261,7 @@ local function merge_osig_list(list)
           local name = norm
           local entries = core.decode_osig(fields[2])
           if name and #entries > 0 then
-            osig[name] = entries
+            state.osig[name] = entries
           end
         end
       end
@@ -302,27 +272,27 @@ end
 -- Fill a renoise.Document string list with the current in-memory signatures.
 local function fill_osig_list(list)
   while list_count(list) > 0 do list:remove(1) end
-  for name, entries in pairs(osig) do
+  for name, entries in pairs(state.osig) do
     list:insert(encode_field(name) .. encode_field(core.encode_osig(entries)))
   end
 end
 
 -- Load both caches from the machine-wide preferences and the per-song tool_data.
 function load_tool_cache()
-  cached_parameters = {}
-  cached_device_names = {}
+  state.cached_parameters = {}
+  state.cached_device_names = {}
   -- Rebuild the in-memory signature map from scratch so a signature learned from a
   -- previous song cannot leak into the next one (which would make Set patch unrelated
   -- bytes on a VST3 device). The machine-wide, per-song, and built-in entries are
   -- re-merged below in that order.
-  for k in pairs(osig) do osig[k] = nil end
+  for k in pairs(state.osig) do state.osig[k] = nil end
   -- Drop the per-song lists carried over in the reused document object. They are
   -- repopulated by from_string() when the current song has tool_data, and stay empty
   -- otherwise; clearing all three here (not just osig) prevents stale parameters and
   -- device names from a previous song leaking into the next when its tool_data is empty.
-  while list_count(tool_cache_doc.osig) > 0 do tool_cache_doc.osig:remove(1) end
-  while list_count(tool_cache_doc.parameters) > 0 do tool_cache_doc.parameters:remove(1) end
-  while list_count(tool_cache_doc.device_names) > 0 do tool_cache_doc.device_names:remove(1) end
+  while list_count(state.tool_cache_doc.osig) > 0 do state.tool_cache_doc.osig:remove(1) end
+  while list_count(state.tool_cache_doc.parameters) > 0 do state.tool_cache_doc.parameters:remove(1) end
+  while list_count(state.tool_cache_doc.device_names) > 0 do state.tool_cache_doc.device_names:remove(1) end
 
   -- Machine-wide (survives across songs and sessions).
   merge_cache_list(renoise.tool().preferences.cached_parameters)
@@ -337,25 +307,25 @@ function load_tool_cache()
     local data = song.tool_data
     if data and data ~= "" then
       local ok, err = pcall(function()
-        tool_cache_doc:from_string(data)
+        state.tool_cache_doc:from_string(data)
       end)
       if not ok then
         print('Oversample: failed to load cache: ' .. tostring(err))
-        while list_count(tool_cache_doc.parameters) > 0 do
-          tool_cache_doc.parameters:remove(1)
+        while list_count(state.tool_cache_doc.parameters) > 0 do
+          state.tool_cache_doc.parameters:remove(1)
         end
-        while list_count(tool_cache_doc.device_names) > 0 do
-          tool_cache_doc.device_names:remove(1)
+        while list_count(state.tool_cache_doc.device_names) > 0 do
+          state.tool_cache_doc.device_names:remove(1)
         end
-        while list_count(tool_cache_doc.osig) > 0 do
-          tool_cache_doc.osig:remove(1)
+        while list_count(state.tool_cache_doc.osig) > 0 do
+          state.tool_cache_doc.osig:remove(1)
         end
       end
     end
     pcall(function()
-      merge_cache_list(tool_cache_doc.parameters)
-      merge_name_list(tool_cache_doc.device_names)
-      merge_osig_list(tool_cache_doc.osig)
+      merge_cache_list(state.tool_cache_doc.parameters)
+      merge_name_list(state.tool_cache_doc.device_names)
+      merge_osig_list(state.tool_cache_doc.osig)
     end)
   end
 
@@ -363,45 +333,45 @@ function load_tool_cache()
   -- always override any stale cached signature (e.g. left over from the removed
   -- calibration flow) so a cached entry can never shadow a verified one.
   for name, entries in pairs(core.known_osig or {}) do
-    osig[name] = entries
+    state.osig[name] = entries
   end
 
-  cache_dirty = false
-  global_cache_dirty = false
-  device_names_dirty = false
-  global_device_names_dirty = false
+  state.cache_dirty = false
+  state.global_cache_dirty = false
+  state.device_names_dirty = false
+  state.global_device_names_dirty = false
 end
 
 -- Rebuild the combined per-song document and persist it to tool_data.
 function save_tool_cache()
-  while list_count(tool_cache_doc.parameters) > 0 do
-    tool_cache_doc.parameters:remove(1)
+  while list_count(state.tool_cache_doc.parameters) > 0 do
+    state.tool_cache_doc.parameters:remove(1)
   end
-  for name, params in pairs(cached_parameters) do
+  for name, params in pairs(state.cached_parameters) do
     local entry = encode_field(name)
     for _, param in ipairs(params) do
       entry = entry .. encode_field(param)
     end
-    tool_cache_doc.parameters:insert(entry)
+    state.tool_cache_doc.parameters:insert(entry)
   end
 
-  while list_count(tool_cache_doc.device_names) > 0 do
-    tool_cache_doc.device_names:remove(1)
+  while list_count(state.tool_cache_doc.device_names) > 0 do
+    state.tool_cache_doc.device_names:remove(1)
   end
-  for _, name in ipairs(cached_device_names) do
-    tool_cache_doc.device_names:insert(name)
+  for _, name in ipairs(state.cached_device_names) do
+    state.tool_cache_doc.device_names:insert(name)
   end
 
-  fill_osig_list(tool_cache_doc.osig)
+  fill_osig_list(state.tool_cache_doc.osig)
 
   local ok, err = pcall(function()
-    renoise.song().tool_data = tool_cache_doc:to_string()
+    renoise.song().tool_data = state.tool_cache_doc:to_string()
   end)
   if not ok then
     print('Oversample: failed to save cache: ' .. tostring(err))
   else
-    cache_dirty = false
-    device_names_dirty = false
+    state.cache_dirty = false
+    state.device_names_dirty = false
   end
 end
 
@@ -411,7 +381,7 @@ function save_global_cache()
   while list_count(list) > 0 do
     list:remove(1)
   end
-  for name, params in pairs(cached_parameters) do
+  for name, params in pairs(state.cached_parameters) do
     local entry = encode_field(name)
     for _, param in ipairs(params) do
       entry = entry .. encode_field(param)
@@ -419,7 +389,7 @@ function save_global_cache()
     list:insert(entry)
   end
   save_global_osig()
-  global_cache_dirty = false
+  state.global_cache_dirty = false
 end
 
 -- Write the in-memory device-name list into the machine-wide preferences.
@@ -428,10 +398,10 @@ function save_global_device_name_cache()
   while list_count(list) > 0 do
     list:remove(1)
   end
-  for _, name in ipairs(cached_device_names) do
+  for _, name in ipairs(state.cached_device_names) do
     list:insert(name)
   end
-  global_device_names_dirty = false
+  state.global_device_names_dirty = false
 end
 
 -- Write the in-memory oversampling signatures into the machine-wide preferences.
@@ -453,16 +423,16 @@ function prune_parameter_cache()
   end
 
   local changed = false
-  for name, _ in pairs(cached_parameters) do
+  for name, _ in pairs(state.cached_parameters) do
     if not existing[name] then
-      cached_parameters[name] = nil
+      state.cached_parameters[name] = nil
       changed = true
     end
   end
 
   if changed then
-    cache_dirty = true
-    global_cache_dirty = true
+    state.cache_dirty = true
+    state.global_cache_dirty = true
   end
 end
 
@@ -493,7 +463,7 @@ end
 -- is needed before that scan has run we walk the song directly (and wire up the
 -- preset-change notifier so the parameter cache still invalidates).
 local function ensure_device_instances(device_name)
-  local entry = devices[device_name]
+  local entry = state.devices[device_name]
   if entry and entry.instances and #entry.instances > 0 then
     return entry.instances
   end
@@ -516,8 +486,8 @@ local function ensure_device_instances(device_name)
     end
   end
 
-  if not devices[device_name] then devices[device_name] = {} end
-  devices[device_name].instances = instances
+  if not state.devices[device_name] then state.devices[device_name] = {} end
+  state.devices[device_name].instances = instances
   return instances
 end
 
@@ -632,7 +602,7 @@ end
 -- Compute the combined osig target label for a row (primary, plus secondary when
 -- one is active). Returns nil for non-osig-driven rows.
 local function osig_target_for_row(row_number)
-  local sd = selected_devices[row_number]
+  local sd = state.selected_devices[row_number]
   if not sd or not sd.osig_driven then
     return nil
   end
@@ -654,10 +624,10 @@ end
 
 local on_song_devices_changed = function()
   prune_parameter_cache()
-  devices_valid = false
-  cached_device_names = collect_device_names()
-  device_names_dirty = true
-  global_device_names_dirty = true
+  state.devices_valid = false
+  state.cached_device_names = collect_device_names()
+  state.device_names_dirty = true
+  state.global_device_names_dirty = true
   save_global_device_name_cache()
   refresh_device_popups()
   add_rows_for_new_known_devices()
@@ -668,11 +638,11 @@ end
 -- we drop the cached list so it is recomputed the next time it is needed.
 function on_device_preset_changed(device)
   local name = device.name
-  if cached_parameters[name] then
+  if state.cached_parameters[name] then
     print('Oversample: preset changed for "' .. name .. '", invalidating cache.')
-    cached_parameters[name] = nil
-    cache_dirty = true
-    global_cache_dirty = true
+    state.cached_parameters[name] = nil
+    state.cache_dirty = true
+    state.global_cache_dirty = true
   end
 end
 
@@ -702,23 +672,21 @@ end
 
 -- Reset all per-song state when a new song is loaded, then reload the cache.
 function oversample_on_new_song()
-  devices = {}
-  selected_devices = {}
-  settings_row_count = 0
-  devices_valid = false
+  state.devices = {}
+  state.selected_devices = {}
+  state.settings_row_count = 0
+  state.devices_valid = false
 
   load_tool_cache()
   attach_song_device_notifiers()
 end
 
-local initialized = false
-
 -- Called once from main.lua when the tool is loaded.
 function oversample_init()
-  if initialized then
+  if state.initialized then
     return
   end
-  initialized = true
+  state.initialized = true
 
   load_tool_cache()
 
@@ -747,13 +715,13 @@ function oversample_init()
   -- actually changed. The global (preferences) copy travels with the tool
   -- install; the per-song copy travels with the .xrns file.
   renoise.tool().app_will_save_document_observable:add_notifier(function()
-    if cache_dirty or device_names_dirty then
+    if state.cache_dirty or state.device_names_dirty then
       save_tool_cache()
     end
-    if global_cache_dirty then
+    if state.global_cache_dirty then
       save_global_cache()
     end
-    if global_device_names_dirty then
+    if state.global_device_names_dirty then
       save_global_device_name_cache()
     end
   end)
@@ -762,11 +730,11 @@ function oversample_init()
 end
 
 function oversample()
-    if dialog then
+    if state.dialog then
         destroy()
     end
 
-    pending_parameter_scans = 0
+    state.pending_parameter_scans = 0
 
     local dialog_view = vb:row {
         id = "org.bitbear.Oversample",
@@ -840,23 +808,23 @@ function oversample()
         }
     }
 
-    dialog = renoise.app():show_custom_dialog("Oversample", dialog_view)
+    state.dialog = renoise.app():show_custom_dialog("Oversample", dialog_view)
 
-    if devices_valid then
+    if state.devices_valid then
         -- In-session cache (instances already collected): rebuild instantly.
         add_device_items_init()
         return
     end
 
     local live_names = collect_device_names()
-    if #cached_device_names > 0 and same_name_set(cached_device_names, live_names) then
+    if #state.cached_device_names > 0 and same_name_set(state.cached_device_names, live_names) then
         -- Reconciled with the live song: show the cached device list now and
         -- resolve the (cheap) live instances lazily when the user interacts.
-        cached_device_names = live_names
-        devices_valid = true
+        state.cached_device_names = live_names
+        state.devices_valid = true
         render_settings_rows(live_names)
         -- Per-row parameter scans may still be running in the background.
-        if pending_parameter_scans == 0 then
+        if state.pending_parameter_scans == 0 then
             vb.views.status.text = 'Done.'
         end
         return
@@ -866,24 +834,24 @@ function oversample()
     -- instances and reconcile against the persisted list.
     vb.views.status.text = 'Finding devices...'
 
-    devices = {}
-    selected_devices = {}
-    settings_row_count = 0
+    state.devices = {}
+    state.selected_devices = {}
+    state.settings_row_count = 0
 
     local slicer = ProcessSlicer(enumerate_tracks, add_device_items_init)
     slicer:start()
 end
 
 function destroy()
-    if dialog then
-        pcall(function() dialog:close() end)
+    if state.dialog then
+        pcall(function() state.dialog:close() end)
     end
-    dialog = nil
+    state.dialog = nil
 
     -- Unregister the per-row views explicitly: the viewbuilder keeps a flat
     -- id registry, so without this the fixed ids (devices_popup_1, ...) would
     -- collide when the dialog is rebuilt on the next open.
-    for i = 1, settings_row_count do
+    for i = 1, state.settings_row_count do
         local ids = create_settings_row_identifiers(i)
         vb.views[ids.device_popup_id] = nil
         vb.views[ids.parameter_popup_id] = nil
@@ -913,8 +881,8 @@ function create_settings_row()
         settings_row:remove_child(add_button)
     end
 
-    settings_row_count = settings_row_count + 1
-    local row_number = settings_row_count
+    state.settings_row_count = state.settings_row_count + 1
+    local row_number = state.settings_row_count
     local settings_row_identifiers = create_settings_row_identifiers()
 
     local device_popup_id = settings_row_identifiers.device_popup_id
@@ -963,7 +931,7 @@ function create_settings_row()
             active = false,
             visible = false,
             notifier = function(value)
-                if not selected_devices[row_number] then
+                if not state.selected_devices[row_number] then
                     return
                 end
                 local device_popup = vb.views[device_popup_id]
@@ -972,24 +940,24 @@ function create_settings_row()
                 if not device_instances[1] then
                     return
                 end
-                local choices = selected_devices[row_number].parameter_choices
-                if selected_devices[row_number].osig_driven then
+                local choices = state.selected_devices[row_number].parameter_choices
+                if state.selected_devices[row_number].osig_driven then
                     -- VST3 row: record the chosen label (the value is applied via
                     -- the state-chunk signature, not a host parameter).
                     if choices and choices[value] then
                         local lbl = choices[value].label
-                        if selected_devices[row_number].osig_multi_axis then
+                        if state.selected_devices[row_number].osig_multi_axis then
                             -- Rebuild the combined key from the (changed) primary axis and
                             -- the current secondary axis selection.
-                            local axes = selected_devices[row_number].osig_axes
-                            local a2 = selected_devices[row_number].osig_axis2_label
+                            local axes = state.selected_devices[row_number].osig_axes
+                            local a2 = state.selected_devices[row_number].osig_axis2_label
                             if a2 == nil and axes and axes[2] then
                                 a2 = axes[2].labels[1]
                             end
-                            selected_devices[row_number].osig_target_label = join_target_label(lbl, a2)
+                            state.selected_devices[row_number].osig_target_label = join_target_label(lbl, a2)
                         else
-                            selected_devices[row_number].osig_target_label = lbl
-                            selected_devices[row_number].osig_target_label_sec = nil
+                            state.selected_devices[row_number].osig_target_label = lbl
+                            state.selected_devices[row_number].osig_target_label_sec = nil
                         end
                     end
                 else
@@ -998,7 +966,7 @@ function create_settings_row()
                         v = choices[value].value
                     end
                     if v ~= nil then
-                        selected_devices[row_number].parameter_value = v
+                        state.selected_devices[row_number].parameter_value = v
                     end
                 end
                 update_secondary(row_number, device_name, device_instances)
@@ -1010,7 +978,7 @@ function create_settings_row()
             active = false,
             notifier = function(value)
                 local parameter_value = value
-                local parameter_name = selected_devices[row_number].parameter_name
+                local parameter_name = state.selected_devices[row_number].parameter_name
                 local device_popup = vb.views[device_popup_id]
                 local device_name = device_popup.items[device_popup.value]
                 parameter_value_changed(parameter_value, parameter_name, device_name, row_number)
@@ -1036,7 +1004,7 @@ function create_settings_row()
                 active = false,
                 visible = false,
                 notifier = function(value)
-                    if not selected_devices[row_number] then
+                    if not state.selected_devices[row_number] then
                         return
                     end
                     local device_popup = vb.views[device_popup_id]
@@ -1045,37 +1013,37 @@ function create_settings_row()
                     if not device_instances[1] then
                         return
                     end
-                    local sec_index = selected_devices[row_number].secondary_parameter_index
-                    if selected_devices[row_number].osig_driven then
-                        if selected_devices[row_number].osig_multi_axis then
+                    local sec_index = state.selected_devices[row_number].secondary_parameter_index
+                    if state.selected_devices[row_number].osig_driven then
+                        if state.selected_devices[row_number].osig_multi_axis then
                             -- Independent axis: the secondary popup holds this device's own
                             -- axis-2 labels; rebuild the combined key from the current
                             -- primary axis value and the newly chosen axis-2 label.
-                            local axes = selected_devices[row_number].osig_axes
+                            local axes = state.selected_devices[row_number].osig_axes
                             local sec_labels = axes and axes[2] and axes[2].labels
                             if sec_labels and sec_labels[value] then
                                 local a2 = sec_labels[value]
                                 local a1 = split_target_label(
-                                    selected_devices[row_number].osig_target_label)
-                                selected_devices[row_number].osig_axis2_label = a2
-                                selected_devices[row_number].osig_target_label = join_target_label(a1, a2)
+                                    state.selected_devices[row_number].osig_target_label)
+                                state.selected_devices[row_number].osig_axis2_label = a2
+                                state.selected_devices[row_number].osig_target_label = join_target_label(a1, a2)
                             end
                         else
                             -- VST3 row: record the chosen secondary label for the combined
                             -- osig target key.
-                            local choices = selected_devices[row_number].secondary_parameter_choices
+                            local choices = state.selected_devices[row_number].secondary_parameter_choices
                             if choices and choices[value] then
-                                selected_devices[row_number].osig_target_label_sec = choices[value].label
+                                state.selected_devices[row_number].osig_target_label_sec = choices[value].label
                             end
                         end
                     elseif sec_index then
-                        local choices = selected_devices[row_number].secondary_parameter_choices
+                        local choices = state.selected_devices[row_number].secondary_parameter_choices
                         local v
                         if choices and choices[value] then
                             v = choices[value].value
                         end
                         if v ~= nil then
-                            selected_devices[row_number].secondary_parameter_value = v
+                            state.selected_devices[row_number].secondary_parameter_value = v
                         end
                     end
                 end,
@@ -1099,7 +1067,7 @@ end
 
 function render_settings_rows(device_names)
     local container = vb.views.settings_container
-    settings_row_count = 0
+    state.settings_row_count = 0
 
     local sorted_names = {}
     for _, n in ipairs(device_names) do
@@ -1149,28 +1117,28 @@ end
 
 function add_device_items_init()
     local ok, err = xpcall(function()
-        devices_valid = true
+        state.devices_valid = true
 
         local device_items = {}
-        if next(devices) ~= nil then
-            for k, _ in pairs(devices) do
+        if next(state.devices) ~= nil then
+            for k, _ in pairs(state.devices) do
                 device_items[#device_items + 1] = k
             end
         else
-            for _, n in ipairs(cached_device_names) do
+            for _, n in ipairs(state.cached_device_names) do
                 device_items[#device_items + 1] = n
             end
         end
 
         table.sort(device_items)
 
-        cached_device_names = device_items
+        state.cached_device_names = device_items
         save_global_device_name_cache()
 
         render_settings_rows(device_items)
 
         -- Per-row parameter scans may still be running in the background.
-        if pending_parameter_scans == 0 then
+        if state.pending_parameter_scans == 0 then
             vb.views.status.text = 'Done.'
         end
     end, debug.traceback)
@@ -1187,7 +1155,7 @@ function add_device_items(device_popup_id, selected_device_index)
     -- the song. `cached_device_names` is kept in sync with the live song by the
     -- device-change handlers, whereas the `devices` map can be stale after a
     -- device is added or removed.
-    for _, n in ipairs(cached_device_names) do
+    for _, n in ipairs(state.cached_device_names) do
         device_items[#device_items + 1] = n
     end
 
@@ -1206,7 +1174,7 @@ function add_device_items(device_popup_id, selected_device_index)
 
     set_main_buttons_active(true)
     -- A parameter scan may still be running in the background.
-    if pending_parameter_scans == 0 then
+    if state.pending_parameter_scans == 0 then
         vb.views.status.text = 'Done.'
     end
 end
@@ -1216,12 +1184,12 @@ end
 -- device is preserved when it still exists in the song.
 function refresh_device_popups()
     local names = {}
-    for _, n in ipairs(cached_device_names) do
+    for _, n in ipairs(state.cached_device_names) do
         names[#names + 1] = n
     end
     table.sort(names)
 
-    for i = 1, settings_row_count do
+    for i = 1, state.settings_row_count do
         local ids = create_settings_row_identifiers(i)
         local device_popup_id = ids.device_popup_id
         local popup = vb.views[device_popup_id]
@@ -1246,7 +1214,7 @@ end
 -- Set of device names currently chosen in the rendered settings rows.
 local function rendered_device_name_set()
     local set = {}
-    for i = 1, settings_row_count do
+    for i = 1, state.settings_row_count do
         local ids = create_settings_row_identifiers(i)
         local popup = vb.views[ids.device_popup_id]
         if popup and popup.items and popup.value and popup.items[popup.value] then
@@ -1272,7 +1240,7 @@ local function add_row_for_device(device_name)
         for i, n in ipairs(popup.items) do
             if n == device_name then
                 popup.value = i
-                device_selected(i, device_name, parameter_popup_id, settings_row_count)
+                device_selected(i, device_name, parameter_popup_id, state.settings_row_count)
                 break
             end
         end
@@ -1283,12 +1251,12 @@ end
 -- user does not have to do it by hand. Devices already represented by a row are
 -- skipped to avoid duplicates.
 function add_rows_for_new_known_devices()
-    if not dialog or not dialog.visible then
+    if not state.dialog or not state.dialog.visible then
         return
     end
 
     local rendered = rendered_device_name_set()
-    for _, name in ipairs(cached_device_names) do
+    for _, name in ipairs(state.cached_device_names) do
         -- Same gate as device_selected: core.known_primary returns nil for an unsupported
         -- VST3 build (no signature), so such a plugin added after the dialog is open is not
         -- auto-added as an inactive row.
@@ -1313,8 +1281,6 @@ end
 -- we enumerate the distinct labels by stepping the value and reading back the
 -- snapped true value. A parameter with 2..64 distinct labels is an enum; one
 -- with more (a continuous parameter) is a slider. The result is cached.
-local parameter_choices_cache = {}
-
 local function parameter_choices(parameter)
     local min_v = parameter.value_min
     local max_v = parameter.value_max
@@ -1326,8 +1292,8 @@ local function parameter_choices(parameter)
     else
         cache_key = parameter.name .. "\0" .. min_v .. "\0" .. max_v .. "\0q0"
     end
-    if parameter_choices_cache[cache_key] then
-        return parameter_choices_cache[cache_key]
+    if state.parameter_choices_cache[cache_key] then
+        return state.parameter_choices_cache[cache_key]
     end
 
     -- Probe a [lo, hi] range in `steps + 1` increments and collect the distinct
@@ -1390,7 +1356,7 @@ local function parameter_choices(parameter)
         choices = probe_range(min_v, max_v, 128)
     end
 
-    parameter_choices_cache[cache_key] = choices
+    state.parameter_choices_cache[cache_key] = choices
     return choices
 end
 
@@ -1441,7 +1407,7 @@ local function clear_secondary(row_number)
         sec_label.text = ""
         sec_label.visible = false
     end
-    local sd = selected_devices[row_number]
+    local sd = state.selected_devices[row_number]
     sd.secondary_parameter_index = nil
     sd.secondary_parameter_value = nil
     sd.secondary_parameter_name = nil
@@ -1462,11 +1428,11 @@ local function update_secondary_osig(row_number, device_name)
     -- Multiple independent oversampling axes (e.g. Saturn 2's "High Quality" mode and
     -- "Linear Phase" toggle): the secondary popup shows the next axis' labels directly
     -- from the signature metadata, with no sibling host parameter involved.
-    if selected_devices[row_number] and selected_devices[row_number].osig_multi_axis then
-        local axes = selected_devices[row_number].osig_axes
+    if state.selected_devices[row_number] and state.selected_devices[row_number].osig_multi_axis then
+        local axes = state.selected_devices[row_number].osig_axes
         if axes and axes[2] then
             local sec_labels = axes[2].labels
-            local a2 = selected_devices[row_number].osig_axis2_label
+            local a2 = state.selected_devices[row_number].osig_axis2_label
             local sidx = 1
             for i, l in ipairs(sec_labels) do
                 if l == a2 then
@@ -1486,11 +1452,11 @@ local function update_secondary_osig(row_number, device_name)
             -- Multi-axis devices have no dependent (sibling) secondary; clear any stale
             -- state left by a previously-selected device so osig_target_for_row() never
             -- appends a leftover secondary label (e.g. "Off / On / Medium").
-            selected_devices[row_number].secondary_parameter_choices = nil
-            selected_devices[row_number].secondary_parameter_index = nil
-            selected_devices[row_number].secondary_parameter_value = nil
-            selected_devices[row_number].secondary_parameter_name = nil
-            selected_devices[row_number].osig_target_label_sec = nil
+            state.selected_devices[row_number].secondary_parameter_choices = nil
+            state.selected_devices[row_number].secondary_parameter_index = nil
+            state.selected_devices[row_number].secondary_parameter_value = nil
+            state.selected_devices[row_number].secondary_parameter_name = nil
+            state.selected_devices[row_number].osig_target_label_sec = nil
             return
         end
     end
@@ -1499,20 +1465,20 @@ local function update_secondary_osig(row_number, device_name)
         hide_secondary()
         return
     end
-    if selected_devices[row_number].parameter_name ~= primary_name then
+    if state.selected_devices[row_number].parameter_name ~= primary_name then
         hide_secondary()
         return
     end
 
     -- The VST3 device does not expose the parameter, so the secondary labels come
     -- from the sibling device's parameter.
-    local sibling = selected_devices[row_number].sibling_device
+    local sibling = state.selected_devices[row_number].sibling_device
     if not sibling then
         hide_secondary()
         return
     end
 
-    local primary_label = selected_devices[row_number].osig_target_label
+    local primary_label = state.selected_devices[row_number].osig_target_label
     -- osig labels can combine multiple axes (e.g. Pro-Q 3's "Linear Phase / Medium");
     -- only the portion before the " / " separator is the primary-axis value we compare
     -- against SECONDARY_SHOW_WHEN, so the dependent secondary still appears for those
@@ -1538,7 +1504,7 @@ local function update_secondary_osig(row_number, device_name)
     for i, c in ipairs(sec_choices) do
         sec_labels[i] = c.label
     end
-    if selected_devices[row_number].osig_target_label_sec == nil and sec_choices[1] then
+    if state.selected_devices[row_number].osig_target_label_sec == nil and sec_choices[1] then
         -- Prefer the resolution already implied by the combined primary label (e.g. the
         -- "Maximum" in "Linear Phase / Maximum") so Minimize/Maximize land on the right
         -- resolution instead of always defaulting to the first choice.
@@ -1548,10 +1514,10 @@ local function update_secondary_osig(row_number, device_name)
                 if c.label == primary_suffix then initial = c.label; break end
             end
         end
-        selected_devices[row_number].osig_target_label_sec = initial
+        state.selected_devices[row_number].osig_target_label_sec = initial
     end
     local sec_idx = 1
-    local cur = selected_devices[row_number].osig_target_label_sec
+    local cur = state.selected_devices[row_number].osig_target_label_sec
     for i, c in ipairs(sec_choices) do
         if c.label == cur then
             sec_idx = i
@@ -1566,13 +1532,13 @@ local function update_secondary_osig(row_number, device_name)
         sec_label.text = sec_name .. ":"
         sec_label.visible = true
     end
-    selected_devices[row_number].secondary_parameter_index = sec_index
-    selected_devices[row_number].secondary_parameter_name = sec_param.name
-    selected_devices[row_number].secondary_parameter_choices = sec_choices
+    state.selected_devices[row_number].secondary_parameter_index = sec_index
+    state.selected_devices[row_number].secondary_parameter_name = sec_param.name
+    state.selected_devices[row_number].secondary_parameter_choices = sec_choices
 end
 
 function update_secondary(row_number, device_name, device_instances)
-    if selected_devices[row_number] and selected_devices[row_number].osig_driven then
+    if state.selected_devices[row_number] and state.selected_devices[row_number].osig_driven then
         update_secondary_osig(row_number, device_name)
         return
     end
@@ -1590,13 +1556,13 @@ function update_secondary(row_number, device_name, device_instances)
         hide_secondary()
         return
     end
-    if selected_devices[row_number].parameter_name ~= primary_name then
+    if state.selected_devices[row_number].parameter_name ~= primary_name then
         hide_secondary()
         return
     end
 
     local device = device_instances[1]
-    local primary_index = selected_devices[row_number].parameter_index
+    local primary_index = state.selected_devices[row_number].parameter_index
     if not primary_index or not device then
         hide_secondary()
         return
@@ -1605,7 +1571,7 @@ function update_secondary(row_number, device_name, device_instances)
     -- Use the intended value (what the user picked in the dropdown), not the
     -- plugin's possibly-stale live value, so the secondary appears as soon as
     -- "Linear Phase" is selected rather than only after "Set" is applied.
-    local intended_value = selected_devices[row_number].parameter_value
+    local intended_value = state.selected_devices[row_number].parameter_value
     if intended_value == nil then
         intended_value = primary_param.value
     end
@@ -1642,10 +1608,10 @@ function update_secondary(row_number, device_name, device_instances)
         sec_label.text = sec_name .. ":"
         sec_label.visible = true
     end
-    selected_devices[row_number].secondary_parameter_index = sec_index
-    selected_devices[row_number].secondary_parameter_name = sec_param.name
-    selected_devices[row_number].secondary_parameter_value = sec_param.value
-    selected_devices[row_number].secondary_parameter_choices = sec_choices
+    state.selected_devices[row_number].secondary_parameter_index = sec_index
+    state.selected_devices[row_number].secondary_parameter_name = sec_param.name
+    state.selected_devices[row_number].secondary_parameter_value = sec_param.value
+    state.selected_devices[row_number].secondary_parameter_choices = sec_choices
 end
 
 -- Populate the value control (dropdown for enums, slider otherwise) for the
@@ -1661,9 +1627,9 @@ local function apply_value_to_control(row_number, device_name, device_instances,
     local popup = vb.views[ids.parameter_value_popup_id]
     local slider = vb.views[ids.parameter_value_slider_id]
 
-    selected_devices[row_number].parameter_index = parameter_index
-    selected_devices[row_number].parameter_name = parameter.name
-    selected_devices[row_number].parameter_value = target_value
+    state.selected_devices[row_number].parameter_index = parameter_index
+    state.selected_devices[row_number].parameter_name = parameter.name
+    state.selected_devices[row_number].parameter_value = target_value
 
     if is_parameter_enum(parameter) then
         local choices = parameter_choices(parameter)
@@ -1677,7 +1643,7 @@ local function apply_value_to_control(row_number, device_name, device_instances,
         popup.active = true
         slider.visible = false
         popup.visible = true
-        selected_devices[row_number].parameter_choices = choices
+        state.selected_devices[row_number].parameter_choices = choices
     else
         slider.min = parameter.value_min
         slider.max = parameter.value_max
@@ -1685,7 +1651,7 @@ local function apply_value_to_control(row_number, device_name, device_instances,
         slider.active = true
         popup.visible = false
         slider.visible = true
-        selected_devices[row_number].parameter_choices = nil
+        state.selected_devices[row_number].parameter_choices = nil
     end
 
     update_secondary(row_number, device_name, device_instances)
@@ -1709,12 +1675,12 @@ end
 -- choice is assumed.
 local function show_osig_dropdown(row_number, device_name, device_instances,
     choices, parameter_name, sibling, sibling_index)
-    selected_devices[row_number].parameter_name = parameter_name
-    selected_devices[row_number].parameter_index = nil
-    selected_devices[row_number].osig_driven = true
-    selected_devices[row_number].sibling_device = sibling
-    selected_devices[row_number].sibling_primary_index = sibling_index
-    selected_devices[row_number].parameter_choices = choices
+    state.selected_devices[row_number].parameter_name = parameter_name
+    state.selected_devices[row_number].parameter_index = nil
+    state.selected_devices[row_number].osig_driven = true
+    state.selected_devices[row_number].sibling_device = sibling
+    state.selected_devices[row_number].sibling_primary_index = sibling_index
+    state.selected_devices[row_number].parameter_choices = choices
 
     local ids = create_settings_row_identifiers(row_number)
     local popup = vb.views[ids.parameter_value_popup_id]
@@ -1726,7 +1692,7 @@ local function show_osig_dropdown(row_number, device_name, device_instances,
     end
 
     local target_label = choices[1] and choices[1].label
-    local entries = osig[core.normalize_device_name(device_name)]
+    local entries = state.osig[core.normalize_device_name(device_name)]
     if entries and #entries > 0 then
         local dev = device_instances[1]
         local ok, blob = pcall(function()
@@ -1744,22 +1710,22 @@ local function show_osig_dropdown(row_number, device_name, device_instances,
             end
         end
     end
-    selected_devices[row_number].osig_target_label = target_label
+    state.selected_devices[row_number].osig_target_label = target_label
 
     local idx = 1
-    if selected_devices[row_number].osig_multi_axis then
+    if state.selected_devices[row_number].osig_multi_axis then
         -- target_label is the combined "axis1 / axis2"; the primary popup only shows
         -- axis1, and the secondary popup (filled by update_secondary) shows axis2.
-        local axes = selected_devices[row_number].osig_axes
+        local axes = state.selected_devices[row_number].osig_axes
         local a1, a2 = split_target_label(target_label)
         if type(target_label) == "string" and a2 == nil then
             -- No separator: default the second axis to its first (off) label so the
             -- stored target is always the full combined key.
             a2 = axes[2] and axes[2].labels[1]
             target_label = a1 .. SECONDARY_SEP .. (a2 or "")
-            selected_devices[row_number].osig_target_label = target_label
+            state.selected_devices[row_number].osig_target_label = target_label
         end
-        selected_devices[row_number].osig_axis2_label = a2
+        state.selected_devices[row_number].osig_axis2_label = a2
         for i, c in ipairs(choices) do
             if c.label == a1 then
                 idx = i
@@ -1797,7 +1763,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     -- VST3 builds expose no host parameter for oversampling; go straight to the
     -- state-chunk signature without enumerating (and matching) the 344 params.
     local norm = core.normalize_device_name(device_name)
-    local sig = osig[norm]
+    local sig = state.osig[norm]
     if sig and #sig > 0 and device_name:sub(1, 5) == "VST3:" then
         -- Several independent oversampling fields (e.g. Saturn 2's "High Quality" mode
         -- and "Linear Phase" toggle): present one dropdown per axis. The primary popup
@@ -1809,16 +1775,16 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
             for i, l in ipairs(axes[1].labels) do
                 mchoices[i] = { label = l, value = i }
             end
-            selected_devices[row_number].osig_multi_axis = true
-            selected_devices[row_number].osig_axes = axes
+            state.selected_devices[row_number].osig_multi_axis = true
+            state.selected_devices[row_number].osig_axes = axes
             show_osig_dropdown(row_number, device_name, device_instances, mchoices, parameter_name, nil, nil)
             return
         end
         -- Not a multi-axis device: clear any stale multi-axis state left by a previously
         -- selected device so single-axis labels are not treated as combined "axis1 / axis2"
         -- keys (which would then fail to match any signature label).
-        selected_devices[row_number].osig_multi_axis = nil
-        selected_devices[row_number].osig_axes = nil
+        state.selected_devices[row_number].osig_multi_axis = nil
+        state.selected_devices[row_number].osig_axes = nil
         local choices = osig_choices_for(norm, sig)
         -- A dependent secondary (e.g. Pro-Q 3's "Processing Resolution") is driven by a
         -- sibling device that exposes the host parameter; pass it through so the secondary
@@ -1834,9 +1800,9 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
 
     local parameter_index = match_parameter(parameter_names(device), parameter_name)
     if parameter_index then
-        selected_devices[row_number].parameter_name = device:parameter(parameter_index).name
-        selected_devices[row_number].parameter_index = parameter_index
-        selected_devices[row_number].osig_driven = nil
+        state.selected_devices[row_number].parameter_name = device:parameter(parameter_index).name
+        state.selected_devices[row_number].parameter_index = parameter_index
+        state.selected_devices[row_number].osig_driven = nil
         set_value_control(row_number, device_name, device_instances, parameter_index)
         return
     end
@@ -1845,7 +1811,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     -- keep oversampling out of the host-parameter list). Use a built-in
     -- state-chunk signature's labels directly (hardcoded, no sibling needed).
     norm = core.normalize_device_name(device_name)
-    local entries = osig[norm]
+    local entries = state.osig[norm]
     -- The osig state-chunk signatures are learned from VST3 builds, which hide
     -- oversampling from the host-parameter list. Only drive them for VST3 devices;
     -- applying a VST3-learned signature to an AU/VST2 build would patch the wrong
@@ -1872,7 +1838,7 @@ end
 
 function device_selected(device_index, device_name, parameter_popup_id, row_number)
     set_main_buttons_active(false)
-    selected_devices[row_number] = {
+    state.selected_devices[row_number] = {
          device_name = device_name,
          device_index = device_index
     }
@@ -1912,7 +1878,7 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
         -- Only touch the UI while the Oversample dialog (and this row's popup)
         -- still exist. The scan may finish after the dialog was closed, in which
         -- case we keep the cached result but skip the visual update.
-        if not dialog or not dialog.visible or not parameters_popup then
+        if not state.dialog or not state.dialog.visible or not parameters_popup then
             return
         end
 
@@ -1938,7 +1904,7 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
             local i = match_parameter(parameters, known_primary_name)
             if i then
                 parameters_popup.value = i
-            elseif osig[core.normalize_device_name(device_name)] then
+            elseif state.osig[core.normalize_device_name(device_name)] then
                 -- VST3 host builds don't expose the oversampling parameter, so it is
                 -- not in the enumerated list. Re-establish the state-chunk dropdown
                 -- (the value popup) so the oversampling choices stay visible after
@@ -1951,9 +1917,9 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
         set_main_buttons_active(true)
     end
 
-    if cached_parameters[device_name] then
+    if state.cached_parameters[device_name] then
         -- Already cached (this session, song, or a previous run): no scan.
-        apply_parameters(cached_parameters[device_name])
+        apply_parameters(state.cached_parameters[device_name])
         if known_primary_name then
             apply_parameter_value(row_number, device_name, known_primary_name)
         end
@@ -1987,8 +1953,8 @@ end
 -- Set the value slider's range/current value from a resolved parameter index.
 function parameter_selected(parameter_index, parameter_name, device_name, row_number)
     local device_instances = ensure_device_instances(device_name)
-    selected_devices[row_number].parameter_name = parameter_name
-    selected_devices[row_number].parameter_index = parameter_index
+    state.selected_devices[row_number].parameter_name = parameter_name
+    state.selected_devices[row_number].parameter_index = parameter_index
 
     set_main_buttons_active(false)
     set_value_control(row_number, device_name, device_instances, parameter_index)
@@ -1996,7 +1962,7 @@ function parameter_selected(parameter_index, parameter_name, device_name, row_nu
 end
 
 function parameter_value_changed(parameter_value, _parameter_name, _device_name, row_number)
-    selected_devices[row_number].parameter_value = parameter_value
+    state.selected_devices[row_number].parameter_value = parameter_value
 end
 
 function enumerate_tracks()
@@ -2006,13 +1972,13 @@ function enumerate_tracks()
 
         -- Count the total number of active devices up front so the scan can show
         -- "Scanning devices… (k/total)" progress instead of flickering names.
-        device_scan_total = 0
-        device_scan_count = 0
+        state.device_scan_total = 0
+        state.device_scan_count = 0
         for t = 1, list_count(song.tracks) do
             local track = song:track(t)
             for d = 1, list_count(track.devices) do
                 if track:device(d).is_active then
-                    device_scan_total = device_scan_total + 1
+                    state.device_scan_total = state.device_scan_total + 1
                 end
             end
         end
@@ -2020,7 +1986,7 @@ function enumerate_tracks()
         for t = 1, list_count(song.tracks) do
             set_main_buttons_active(false)
 
-            if dialog and not dialog.visible then
+            if state.dialog and not state.dialog.visible then
                 print('Dialog closed, stopping.')
                 return
             end
@@ -2050,7 +2016,7 @@ function enumerate_devices(track)
         set_main_buttons_active(false)
 
         for d = 1, list_count(track.devices) do
-            if dialog and not dialog.visible then
+            if state.dialog and not state.dialog.visible then
                 print('Dialog closed, stopping.')
                 return
             end
@@ -2058,21 +2024,21 @@ function enumerate_devices(track)
             local device = track:device(d)
 
             if device.is_active then
-                device_scan_count = device_scan_count + 1
+                state.device_scan_count = state.device_scan_count + 1
                 vb.views.status.text = string.format(
-                    'Scanning devices... (%d/%d)', device_scan_count, device_scan_total)
+                    'Scanning devices... (%d/%d)', state.device_scan_count, state.device_scan_total)
 
-                if not devices[device.name] then
+                if not state.devices[device.name] then
                     -- print('Resetting device "' .. device.name .. '".')
-                    devices[device.name] = {}
+                    state.devices[device.name] = {}
                 end
 
-                if not devices[device.name].instances then
+                if not state.devices[device.name].instances then
                     -- print('Resetting device instances for "' .. device.name .. '".')
-                    devices[device.name].instances = {}
+                    state.devices[device.name].instances = {}
                 end
 
-                table.insert(devices[device.name].instances, device)
+                table.insert(state.devices[device.name].instances, device)
 
                 -- Invalidate the cache if this plugin's preset (and thus possibly
                 -- its parameter list) changes while the song is open.
@@ -2093,7 +2059,7 @@ function enumerate_devices(track)
 end
 
 function get_parameters(device_name)
-    local cached = cached_parameters[device_name]
+    local cached = state.cached_parameters[device_name]
     if cached then
         -- Reject a stale cache: empty, placeholder-only, or — most importantly —
         -- shorter than the plugin's current parameter count (a truncated list
@@ -2106,7 +2072,7 @@ function get_parameters(device_name)
             and not cached[1]:match("^%(parameter %d+%)$") then
             return cached
         end
-        cached_parameters[device_name] = nil
+        state.cached_parameters[device_name] = nil
     end
 
     local instances = ensure_device_instances(device_name)
@@ -2156,9 +2122,9 @@ function get_parameters(device_name)
     -- non-empty enumeration; a partial or empty pass is retried the next time
     -- it is needed.
     if got_real then
-        cached_parameters[device_name] = parameters
-        cache_dirty = true
-        global_cache_dirty = true
+        state.cached_parameters[device_name] = parameters
+        state.cache_dirty = true
+        state.global_cache_dirty = true
     end
 
     return parameters
@@ -2187,13 +2153,13 @@ end
 
 function enumerate_parameters(device_name)
     -- print('enumerate_parameters')
-    if dialog and dialog.visible and vb.views.set_values_button then
+    if state.dialog and state.dialog.visible and vb.views.set_values_button then
         set_main_buttons_active(false)
     end
 
     local parameters = get_parameters(device_name)
 
-    if dialog and dialog.visible and vb.views.set_values_button then
+    if state.dialog and state.dialog.visible and vb.views.set_values_button then
         set_main_buttons_active(true)
     end
 
@@ -2215,7 +2181,7 @@ function extreme_values(extreme)
     -- Collect the rows that have a device so we can report progress and avoid
     -- re-scanning inside the sliced loop.
     local work = {}
-    for row_number, selected_device in ipairs(selected_devices) do
+    for row_number, selected_device in ipairs(state.selected_devices) do
         local device_name = selected_device.device_name
         if device_name then
             local device_instances = ensure_device_instances(device_name)
@@ -2223,7 +2189,7 @@ function extreme_values(extreme)
                 -- For VST3 plugins whose oversampling is not a host parameter, set
                 -- the intended dropdown label (first = minimum, last = maximum) so
                 -- set_values() can drive the state chunk to that exact value.
-                if selected_device.osig_driven and osig[core.normalize_device_name(device_name)] then
+                if selected_device.osig_driven and state.osig[core.normalize_device_name(device_name)] then
                     if selected_device.osig_multi_axis then
                         -- Minimum/Maximum spans both independent axes: both off for the
                         -- minimum, both at their highest for the maximum.
@@ -2269,7 +2235,7 @@ function extreme_values(extreme)
         local sec_param = device:parameter(sec_index)
         local ids = create_settings_row_identifiers(row_number)
         local spopup = vb.views[ids.parameter_value_secondary_popup_id]
-        local sec_choices = selected_devices[row_number].secondary_parameter_choices
+        local sec_choices = state.selected_devices[row_number].secondary_parameter_choices
         if not sec_choices then
             sec_choices = parameter_choices(sec_param)
         end
@@ -2282,28 +2248,28 @@ function extreme_values(extreme)
         spopup.value = sec_idx
         spopup.active = true
         spopup.visible = true
-        selected_devices[row_number].secondary_parameter_index = sec_index
-        selected_devices[row_number].secondary_parameter_name = sec_param.name
-        selected_devices[row_number].secondary_parameter_value = target_value
-        selected_devices[row_number].secondary_parameter_choices = sec_choices
+        state.selected_devices[row_number].secondary_parameter_index = sec_index
+        state.selected_devices[row_number].secondary_parameter_name = sec_param.name
+        state.selected_devices[row_number].secondary_parameter_value = target_value
+        state.selected_devices[row_number].secondary_parameter_choices = sec_choices
     end
 
     -- Move the primary value control (and any revealed dependent secondary) for
     -- one row to the requested extreme, purely in the UI.
     local function display_extreme(row_number, device_name, device_instances)
-        local parameter_index = selected_devices[row_number].parameter_index
+        local parameter_index = state.selected_devices[row_number].parameter_index
         if not parameter_index then
-            if selected_devices[row_number].osig_driven then
+            if state.selected_devices[row_number].osig_driven then
                 local ids = create_settings_row_identifiers(row_number)
                 local popup = vb.views[ids.parameter_value_popup_id]
-                local choices = selected_devices[row_number].parameter_choices
-                local target_label = selected_devices[row_number].osig_target_label
+                local choices = state.selected_devices[row_number].parameter_choices
+                local target_label = state.selected_devices[row_number].osig_target_label
                 local idx = 1
-                if selected_devices[row_number].osig_multi_axis then
+                if state.selected_devices[row_number].osig_multi_axis then
                     -- target_label is the combined "axis1 / axis2"; show axis1 in the
                     -- primary popup and let update_secondary place axis2 in the secondary.
                     local a1, a2 = split_target_label(target_label)
-                    selected_devices[row_number].osig_axis2_label = a2
+                    state.selected_devices[row_number].osig_axis2_label = a2
                     if choices then
                         for i, c in ipairs(choices) do
                             if c.label == a1 then
@@ -2334,7 +2300,7 @@ function extreme_values(extreme)
 
         -- The new primary value may reveal a dependent secondary (e.g. Pro-Q's
         -- "Processing Resolution"); if so, preview it at the same extreme.
-        local sec_index = selected_devices[row_number].secondary_parameter_index
+        local sec_index = state.selected_devices[row_number].secondary_parameter_index
         if sec_index then
             local sec_param = device:parameter(sec_index)
             local sec_target = (extreme == "min") and sec_param.value_min or sec_param.value_max
@@ -2344,7 +2310,7 @@ function extreme_values(extreme)
 
     -- Run the UI update in a sliced coroutine so the dialog stays responsive.
     local function process()
-        if dialog and not dialog.visible then
+        if state.dialog and not state.dialog.visible then
             return
         end
         for _, w in ipairs(work) do
@@ -2396,7 +2362,7 @@ function set_main_buttons_active(active)
 
     -- Disable every control in the grid while an action (Set/Minimize/Maximize) or a
     -- background scan is in flight, so the user can't edit rows mid-operation.
-    for r = 1, settings_row_count do
+    for r = 1, state.settings_row_count do
         local ids = create_settings_row_identifiers(r)
         for _, key in ipairs({
             "device_popup_id",
@@ -2425,7 +2391,7 @@ end
 -- of device instances whose state chunk was actually changed; blobs already at the
 -- target are a successful no-op and are not counted.
 
-local function apply_osig_to_device_name(device_name, target, state)
+local function apply_osig_to_device_name(device_name, target, save_state)
   -- osig state-chunk signatures are VST3-only; applying them to an AU/VST2 build
   -- would patch the wrong bytes. Guard here as the last line of defense even though
   -- the UI only marks rows osig_driven for VST3 devices.
@@ -2433,19 +2399,19 @@ local function apply_osig_to_device_name(device_name, target, state)
     return 0
   end
   local norm = core.normalize_device_name(device_name)
-  local entries = osig[norm]
+  local entries = state.osig[norm]
   if not entries or #entries == 0 then
     return 0
   end
   -- Renoise caches a VST3 plugin's serialized state; refresh it from the live GUI
   -- (by saving first) so we patch the current state and never revert the user's
   -- other settings. Guarded so an unsaved song never triggers a save dialog.
-  -- `state.saved` ensures the song is refreshed at most once across all osig rows
-  -- applied in a single Set action.
+  -- `save_state.saved` ensures the song is refreshed at most once across all osig
+  -- rows applied in a single Set action.
   local song = renoise.song()
-  if not state.saved and song.file_name and song.file_name ~= "" then
+  if not save_state.saved and song.file_name and song.file_name ~= "" then
     pcall(function() song:save() end)
-    state.saved = true
+    save_state.saved = true
   end
   -- "toggle" resolves to a concrete label: detect the current value, then step to
   -- the next one in the device's natural oversampling order (cyclic). This keeps a
@@ -2523,7 +2489,7 @@ function set_values()
     -- Shared across osig rows so the VST3 state-refresh save happens once per Set.
     local osig_save_state = { saved = false }
 
-    for row_number, selected_device in ipairs(selected_devices) do
+    for row_number, selected_device in ipairs(state.selected_devices) do
         local device_name = selected_device.device_name
         local parameter_name = selected_device.parameter_name
         local parameter_value = selected_device.parameter_value
