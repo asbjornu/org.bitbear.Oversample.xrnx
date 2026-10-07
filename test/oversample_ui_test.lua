@@ -3,10 +3,11 @@
 package.path = "./?.lua;" .. package.path
 local lu = require("luaunit")
 local core = require("Oversample/oversample_core")
+local cache_factory = require("Oversample/cache")
 
 -- The tool module's functions, refreshed by each setUp via dofile.
 local oversample, destroy, create_settings_row, update_secondary
-local parameter_selected, device_selected, set_values, load_tool_cache
+local parameter_selected, device_selected, set_values
 local refresh_device_popups, add_device_items, set_main_buttons_active
 
 local function upvalue(fn, wanted)
@@ -120,7 +121,6 @@ function TestDialogLayout:setUp()
     parameter_selected = module.parameter_selected
     device_selected = module.device_selected
     set_values = module.set_values
-    load_tool_cache = module.load_tool_cache
     refresh_device_popups = module.refresh_device_popups
     add_device_items = module.add_device_items
     set_main_buttons_active = module.set_main_buttons_active
@@ -136,6 +136,8 @@ function TestDialogLayout:setUp()
     self.footer = self.root.views[1].views[4]
     self.state = state_of(update_secondary)
     self.selected = self.state.selected_devices
+    -- Build the cache module against the same injected state the coordinator uses.
+    self.cache = cache_factory({ renoise = renoise, core = core, state = self.state })
 end
 
 function TestDialogLayout:tearDown()
@@ -510,8 +512,8 @@ function TestDialogLayout:test_merge_osig_list_normalizes_cached_name()
    -- Older caches may persist signatures under a raw, host-prefixed name
    -- (e.g. "VST3: FabFilter: ..."); merge must normalize the key so lookups via
    -- osig[core.normalize_device_name(...)] can still find them.
-   local merge = upvalue(load_tool_cache, "merge_osig_list")
-   local osig = state_of(merge).osig
+   local merge = self.cache.merge_osig_list
+   local osig = self.state.osig
    local raw = "VST3: Acme: Compressor"
    local list = {
       size = 1,
@@ -562,8 +564,8 @@ function TestDialogLayout:test_collect_device_names_dedupes_and_skips_inactive()
 end
 
 function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
-    local merge = upvalue(load_tool_cache, "merge_cache_list")
-    local cached = state_of(merge).cached_parameters
+    local merge = self.cache.merge_cache_list
+    local cached = self.state.cached_parameters
     local list = {
         size = 1,
         [1] = core.encode_field("Device") .. core.encode_field("P1") .. core.encode_field("P2"),
@@ -573,8 +575,8 @@ function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
 end
 
 function TestDialogLayout:test_merge_name_list_dedupes_preserving_order()
-    local merge = upvalue(load_tool_cache, "merge_name_list")
-    local cached = state_of(merge).cached_device_names
+    local merge = self.cache.merge_name_list
+    local cached = self.state.cached_device_names
     for i = #cached, 1, -1 do cached[i] = nil end
     merge({ size = 3, [1] = "B", [2] = "A", [3] = "B" })
     lu.assertEquals(cached, { "B", "A" })

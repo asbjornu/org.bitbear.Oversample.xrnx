@@ -1,8 +1,6 @@
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
 -- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
 local core = require("Oversample/oversample_core")
-local encode_field = core.encode_field
-local decode_fields = core.decode_fields
 local match_parameter = core.match_parameter
 local known_primary = core.known_primary
 local known_secondary = core.known_secondary
@@ -11,12 +9,12 @@ local same_name_set = core.same_name_set
 
 -- All mutable runtime state lives in one injected table (see Oversample/state.lua).
 local state = require("Oversample/state")(renoise)
+local cache = require("Oversample/cache")({ renoise = renoise, core = core, state = state })
+local list_count = cache.list_count
 
 -- Every function below is a module-local. These forward declarations exist only
 -- so mutually recursive helpers can be referenced before they are defined; the
 -- definitions use `function name(...)` and assign to the local.
-local load_tool_cache, save_tool_cache, save_global_cache
-local save_global_device_name_cache, save_global_osig, prune_parameter_cache
 local on_device_preset_changed, oversample_on_new_song, oversample_init
 local oversample, destroy, create_settings_row, render_settings_rows
 local add_device_items_init, add_device_items, refresh_device_popups
@@ -154,288 +152,8 @@ local function mark_parameter_scan_finished()
     end
 end
 
--- known_devices_parameters is provided by the core module (see oversample_core.lua).
-
-
--------------------------------------------------------------------------------
--- Persistent parameter cache
---
--- Enumerating every parameter of every plugin is what made this tool slow.
--- Plugin parameter lists only change when a plugin is added or removed, so we
--- cache them and store the cache *inside the song file* via
--- renoise.song().tool_data. Renoise keeps this data slot when the song is
--- saved/reloaded (it is unique per tool bundle id), so the cache survives
--- across sessions and never has to be recomputed for already known plugins.
--------------------------------------------------------------------------------
-
--- A per-device cache entry is stored as a length-prefixed, fully printable
--- string ("<len>;<value>" blocks concatenated). This survives Renoise's XML
--- serialization of renoise.song().tool_data without relying on delimiters
--- that device/parameter names might contain.
--- encode_field / decode_fields are provided by the core module.
-
--- The in-memory mirrors of the persisted caches, the combined per-song cache
--- document, and the *_dirty flags that mark what still needs persisting all live
--- in the shared state table (see Oversample/state.lua).
-
--- Count elements of a renoise.Document ObservableList. Observable lists expose
--- their length through the :size() method; plain Lua tables (the in-memory
--- mirrors and test doubles) fall back to a size field or the length operator.
-local function list_count(list)
-  if type(list.size) == "function" then
-    return list:size()
-  end
-  if list.size ~= nil then
-    return list.size
-  end
-  return #list
-end
-
--- Coerce a renoise.Document list element to a plain string. Document Node
--- elements (userdata) can appear when stale/corrupt cached data is parsed, in
--- which case we extract the node's text value (or skip it if unrecoverable).
-local function list_item_str(item)
-  if type(item) == "string" then
-    return item
-  end
-  if type(item) == "userdata" then
-    local ok, v = pcall(function() return item.value end)
-    if ok and type(v) == "string" then return v end
-    local ok2, v2 = pcall(function() return item.text_value end)
-    if ok2 and type(v2) == "string" then return v2 end
-  end
-  return nil
-end
-
--- Merge one serialized cache list (a renoise.Document string list) into the
--- in-memory parameter mirror. Per-song entries override machine-wide ones.
-local function merge_cache_list(list)
-  for i = 1, list_count(list) do
-    local item = list_item_str(list[i])
-    if item then
-      local fields = decode_fields(item)
-      if #fields >= 2 then
-        local name = fields[1]
-        local params = {}
-        for p = 2, #fields do
-          params[p - 1] = fields[p]
-        end
-        state.cached_parameters[name] = params
-      end
-    end
-  end
-end
-
--- Merge a serialized name list, de-duplicating while preserving order.
-local function merge_name_list(list)
-  for i = 1, list_count(list) do
-    local name = tostring(list[i])
-    local seen = false
-    for _, v in ipairs(state.cached_device_names) do
-      if v == name then seen = true; break end
-    end
-    if not seen then state.cached_device_names[#state.cached_device_names + 1] = name end
-  end
-end
-
--- Merge a serialized oversampling-signature list into the in-memory mirror. Each
--- stored item encodes the device name followed by the encoded entries.
-local function merge_osig_list(list)
-  for i = 1, list_count(list) do
-    local item = list_item_str(list[i])
-    if item then
-      local fields = decode_fields(item)
-      if #fields >= 2 then
-        local raw_name = fields[1]
-        -- The oversampling-signature patch route is VST3-only, and VST3 chunks are not
-        -- interchangeable with VST2/AU/CLAP/LV2/DX state. A persisted signature whose
-        -- name carries a *recognized host-format* prefix other than VST3 (e.g.
-        -- "VST: FabFilter: ...") must be discarded so it cannot normalize to the same
-        -- name as the VST3 entry and win the merge. Vendor names such as
-        -- "FabFilter: Pro-C 2" are NOT host prefixes: normalize_device_name leaves them
-        -- unchanged, so they (our own persisted VST3 signatures) are kept. VST3-prefixed
-        -- names are stripped to the same vendor name for lookup.
-        local norm = core.normalize_device_name(raw_name)
-        local has_host_prefix = (norm ~= raw_name)
-        if not has_host_prefix or raw_name:sub(1, 5) == "VST3:" then
-          local name = norm
-          local entries = core.decode_osig(fields[2])
-          if name and #entries > 0 then
-            state.osig[name] = entries
-          end
-        end
-      end
-    end
-  end
-end
-
--- Fill a renoise.Document string list with the current in-memory signatures.
-local function fill_osig_list(list)
-  while list_count(list) > 0 do list:remove(1) end
-  for name, entries in pairs(state.osig) do
-    list:insert(encode_field(name) .. encode_field(core.encode_osig(entries)))
-  end
-end
-
--- Load both caches from the machine-wide preferences and the per-song tool_data.
-function load_tool_cache()
-  state.cached_parameters = {}
-  state.cached_device_names = {}
-  -- Rebuild the in-memory signature map from scratch so a signature learned from a
-  -- previous song cannot leak into the next one (which would make Set patch unrelated
-  -- bytes on a VST3 device). The machine-wide, per-song, and built-in entries are
-  -- re-merged below in that order.
-  for k in pairs(state.osig) do state.osig[k] = nil end
-  -- Drop the per-song lists carried over in the reused document object. They are
-  -- repopulated by from_string() when the current song has tool_data, and stay empty
-  -- otherwise; clearing all three here (not just osig) prevents stale parameters and
-  -- device names from a previous song leaking into the next when its tool_data is empty.
-  while list_count(state.tool_cache_doc.osig) > 0 do state.tool_cache_doc.osig:remove(1) end
-  while list_count(state.tool_cache_doc.parameters) > 0 do state.tool_cache_doc.parameters:remove(1) end
-  while list_count(state.tool_cache_doc.device_names) > 0 do state.tool_cache_doc.device_names:remove(1) end
-
-  -- Machine-wide (survives across songs and sessions).
-  merge_cache_list(renoise.tool().preferences.cached_parameters)
-  merge_name_list(renoise.tool().preferences.cached_device_names)
-  merge_osig_list(renoise.tool().preferences.osig)
-
-  -- Per-song (travels with the .xrns file; overrides machine-wide). The song may
-  -- not exist yet while the tool is loaded at startup, before Renoise creates the
-  -- initial song, so guard against a nil song here.
-  local song = renoise.song()
-  if song then
-    local data = song.tool_data
-    if data and data ~= "" then
-      local ok, err = pcall(function()
-        state.tool_cache_doc:from_string(data)
-      end)
-      if not ok then
-        print('Oversample: failed to load cache: ' .. tostring(err))
-        while list_count(state.tool_cache_doc.parameters) > 0 do
-          state.tool_cache_doc.parameters:remove(1)
-        end
-        while list_count(state.tool_cache_doc.device_names) > 0 do
-          state.tool_cache_doc.device_names:remove(1)
-        end
-        while list_count(state.tool_cache_doc.osig) > 0 do
-          state.tool_cache_doc.osig:remove(1)
-        end
-      end
-    end
-    pcall(function()
-      merge_cache_list(state.tool_cache_doc.parameters)
-      merge_name_list(state.tool_cache_doc.device_names)
-      merge_osig_list(state.tool_cache_doc.osig)
-    end)
-  end
-
-  -- Built-in signatures (learned offline from saved songs) are authoritative: they
-  -- always override any stale cached signature (e.g. left over from the removed
-  -- calibration flow) so a cached entry can never shadow a verified one.
-  for name, entries in pairs(core.known_osig or {}) do
-    state.osig[name] = entries
-  end
-
-  state.cache_dirty = false
-  state.global_cache_dirty = false
-  state.device_names_dirty = false
-  state.global_device_names_dirty = false
-end
-
--- Rebuild the combined per-song document and persist it to tool_data.
-function save_tool_cache()
-  while list_count(state.tool_cache_doc.parameters) > 0 do
-    state.tool_cache_doc.parameters:remove(1)
-  end
-  for name, params in pairs(state.cached_parameters) do
-    local entry = encode_field(name)
-    for _, param in ipairs(params) do
-      entry = entry .. encode_field(param)
-    end
-    state.tool_cache_doc.parameters:insert(entry)
-  end
-
-  while list_count(state.tool_cache_doc.device_names) > 0 do
-    state.tool_cache_doc.device_names:remove(1)
-  end
-  for _, name in ipairs(state.cached_device_names) do
-    state.tool_cache_doc.device_names:insert(name)
-  end
-
-  fill_osig_list(state.tool_cache_doc.osig)
-
-  local ok, err = pcall(function()
-    renoise.song().tool_data = state.tool_cache_doc:to_string()
-  end)
-  if not ok then
-    print('Oversample: failed to save cache: ' .. tostring(err))
-  else
-    state.cache_dirty = false
-    state.device_names_dirty = false
-  end
-end
-
--- Write the in-memory parameter cache into the machine-wide preferences.
-function save_global_cache()
-  local list = renoise.tool().preferences.cached_parameters
-  while list_count(list) > 0 do
-    list:remove(1)
-  end
-  for name, params in pairs(state.cached_parameters) do
-    local entry = encode_field(name)
-    for _, param in ipairs(params) do
-      entry = entry .. encode_field(param)
-    end
-    list:insert(entry)
-  end
-  save_global_osig()
-  state.global_cache_dirty = false
-end
-
--- Write the in-memory device-name list into the machine-wide preferences.
-function save_global_device_name_cache()
-  local list = renoise.tool().preferences.cached_device_names
-  while list_count(list) > 0 do
-    list:remove(1)
-  end
-  for _, name in ipairs(state.cached_device_names) do
-    list:insert(name)
-  end
-  state.global_device_names_dirty = false
-end
-
--- Write the in-memory oversampling signatures into the machine-wide preferences.
-function save_global_osig()
-  fill_osig_list(renoise.tool().preferences.osig)
-end
-
--- Drop cache entries for device types that no longer exist in the song.
--- Called whenever the song's device set changes (plugin added or removed).
-function prune_parameter_cache()
-  local song = renoise.song()
-  local existing = {}
-
-  for t = 1, list_count(song.tracks) do
-    local track = song:track(t)
-    for d = 1, list_count(track.devices) do
-      existing[track:device(d).name] = true
-    end
-  end
-
-  local changed = false
-  for name, _ in pairs(state.cached_parameters) do
-    if not existing[name] then
-      state.cached_parameters[name] = nil
-      changed = true
-    end
-  end
-
-  if changed then
-    state.cache_dirty = true
-    state.global_cache_dirty = true
-  end
-end
-
+-- The persistent parameter/device/oversampling-signature cache lives in
+-- Oversample/cache.lua; the coordinator only calls its load/save/prune API.
 -- The ordered list of device names currently in the song (tight loop, no
 -- per-device yields). Used to refresh the persisted name list and to reconcile
 -- the cache against the live song on open.
@@ -623,12 +341,12 @@ local function osig_target_for_row(row_number)
 end
 
 local on_song_devices_changed = function()
-  prune_parameter_cache()
+  cache.prune_parameter_cache()
   state.devices_valid = false
   state.cached_device_names = collect_device_names()
   state.device_names_dirty = true
   state.global_device_names_dirty = true
-  save_global_device_name_cache()
+  cache.save_global_device_name_cache()
   refresh_device_popups()
   add_rows_for_new_known_devices()
 end
@@ -677,7 +395,7 @@ function oversample_on_new_song()
   state.settings_row_count = 0
   state.devices_valid = false
 
-  load_tool_cache()
+  cache.load_tool_cache()
   attach_song_device_notifiers()
 end
 
@@ -688,13 +406,13 @@ function oversample_init()
   end
   state.initialized = true
 
-  load_tool_cache()
+  cache.load_tool_cache()
 
   -- The device notifiers need a live song, which may not exist yet while the tool
   -- is being loaded at Renoise startup (before the initial song is created). Defer
   -- them (and the per-song cache load) until a song is available.
   local function init_song_dependencies()
-    load_tool_cache()
+    cache.load_tool_cache()
     attach_song_device_notifiers()
   end
 
@@ -716,13 +434,13 @@ function oversample_init()
   -- install; the per-song copy travels with the .xrns file.
   renoise.tool().app_will_save_document_observable:add_notifier(function()
     if state.cache_dirty or state.device_names_dirty then
-      save_tool_cache()
+      cache.save_tool_cache()
     end
     if state.global_cache_dirty then
-      save_global_cache()
+      cache.save_global_cache()
     end
     if state.global_device_names_dirty then
-      save_global_device_name_cache()
+      cache.save_global_device_name_cache()
     end
   end)
 
@@ -1133,7 +851,7 @@ function add_device_items_init()
         table.sort(device_items)
 
         state.cached_device_names = device_items
-        save_global_device_name_cache()
+        cache.save_global_device_name_cache()
 
         render_settings_rows(device_items)
 
@@ -2565,8 +2283,8 @@ local Oversample = {
 
 -- White-box surface driven directly by test/oversample_ui_test.lua.
 Oversample.destroy = destroy
-Oversample.load_tool_cache = load_tool_cache
-Oversample.save_tool_cache = save_tool_cache
+Oversample.load_tool_cache = cache.load_tool_cache
+Oversample.save_tool_cache = cache.save_tool_cache
 Oversample.create_settings_row = create_settings_row
 Oversample.update_secondary = update_secondary
 Oversample.device_selected = device_selected
