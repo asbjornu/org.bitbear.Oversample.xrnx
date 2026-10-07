@@ -3,7 +3,7 @@
 
   The tool runs inside Renoise, whose runtime exposes the `renoise` global and a
   `class` helper. `ProcessSlicer` is a Renoise `class` and therefore also a
-  global. Everything else lives in local module scope (Oversample.lua returns a
+  global. Everything else lives in local module scope (oversample.lua returns a
   module table), so no other globals are declared and any accidental leak is
   reported.
 

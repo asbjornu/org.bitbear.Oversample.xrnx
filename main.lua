@@ -5,7 +5,7 @@ Written by Bitbear
 https://bitbear.org/
 ============================================================================]]--
 
-local Oversample = require "Oversample/Oversample"
+local Oversample = require "Oversample/oversample"
 require "Oversample/ProcessSlicer"
 
 --------------------------------------------------------------------------------

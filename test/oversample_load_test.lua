@@ -77,9 +77,9 @@ end
 
 -- Exercise the load once, up front, so the assertions below only inspect the
 -- captured outcome (no metatable is active while luaunit runs).
-package.loaded["Oversample/Oversample"] = nil
+package.loaded["Oversample/oversample"] = nil
 local loaded_ok, loaded_module = with_strict_globals(function()
-   return require("Oversample/Oversample")
+   return require("Oversample/oversample")
 end)
 
 local leaked = {}

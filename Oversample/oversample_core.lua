@@ -2,7 +2,7 @@
 Oversample/oversample_core.lua
 
 Pure, Renoise-independent data-manipulation and helper logic for the Oversample
-tool, extracted from Oversample.lua so it can be unit-tested in isolation with a
+tool, extracted from oversample.lua so it can be unit-tested in isolation with a
 plain Lua interpreter (see test/oversample_core_test.lua).
 
 This module intentionally has NO dependency on `renoise`, `vb` (ViewBuilder) or
