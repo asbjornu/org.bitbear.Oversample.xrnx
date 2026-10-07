@@ -49,4 +49,7 @@ files = {
   ["test/oversample_ui_test.lua"] = {
     globals = { "TestDialogLayout" },
   },
+  ["test/oversample_load_test.lua"] = {
+    globals = { "TestLoad" },
+  },
 }
