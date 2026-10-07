@@ -34,19 +34,19 @@ TestSettingsRowIdentifiers = {}
 function TestSettingsRowIdentifiers:test_contains_row_number_and_suffixes()
    local ids = core.create_settings_row_identifiers(3)
 
-   lu.assertEquals(ids["device_popup_id"], "devices_popup_3")
-   lu.assertEquals(ids["parameter_popup_id"], "parameters_popup_3")
-   lu.assertEquals(ids["parameter_value_popup_id"], "parameter_value_popup_3")
-   lu.assertEquals(ids["parameter_value_slider_id"], "parameter_value_slider_3")
-   lu.assertEquals(ids["parameter_value_secondary_popup_id"], "parameter_value_secondary_popup_3")
-   lu.assertEquals(ids["settings_row_id"], "settings_row_3")
-   lu.assertEquals(ids["add_button_id"], "add_button_3")
+   lu.assertEquals(ids.device_popup_id, "devices_popup_3")
+   lu.assertEquals(ids.parameter_popup_id, "parameters_popup_3")
+   lu.assertEquals(ids.parameter_value_popup_id, "parameter_value_popup_3")
+   lu.assertEquals(ids.parameter_value_slider_id, "parameter_value_slider_3")
+   lu.assertEquals(ids.parameter_value_secondary_popup_id, "parameter_value_secondary_popup_3")
+   lu.assertEquals(ids.settings_row_id, "settings_row_3")
+   lu.assertEquals(ids.add_button_id, "add_button_3")
 end
 
 function TestSettingsRowIdentifiers:test_different_rows_are_distinct()
    local a = core.create_settings_row_identifiers(1)
    local b = core.create_settings_row_identifiers(2)
-   lu.assertNotEquals(a["settings_row_id"], b["settings_row_id"])
+   lu.assertNotEquals(a.settings_row_id, b.settings_row_id)
 end
 
 
@@ -230,9 +230,9 @@ TestKnownDevicesParameters = {}
 
 function TestKnownDevicesParameters:test_every_entry_is_string_or_array_of_strings()
    for device_name, value in pairs(core.known_devices_parameters) do
-      if (type(value) == "string") then
+      if type(value) == "string" then
          lu.assertIsString(value)
-      elseif (type(value) == "table") then
+      elseif type(value) == "table" then
          for _, v in ipairs(value) do
             lu.assertIsString(v)
          end
@@ -543,6 +543,21 @@ function TestChunkPatch:test_osig_encode_decode_round_trip()
     lu.assertEquals(decoded, entries)
 end
 
+function TestChunkPatch:test_osig_round_trips_dont_care_marker()
+    -- A don't-care byte (false) must survive encode/decode, and decode must accept the
+    -- "any" token rather than treating it as a malformed byte.
+    local entries = {
+       { pos = 3, values = { Zero = false, Linear = 0x40 } },
+       { pos = 9, values = { Zero = 0, Linear = 0x40 } },
+    }
+    lu.assertEquals(core.decode_osig(core.encode_osig(entries)), entries)
+
+    local field = table.concat({ "3", "Zero", "any", "Linear", "64" }, "\0")
+    lu.assertEquals(core.decode_osig(core.encode_field(core.b64encode(field))), {
+       { pos = 3, values = { Zero = false, Linear = 64 } },
+    })
+end
+
 function TestChunkPatch:test_osig_decode_splits_nul_delimited_fields()
     -- The inner record still uses literal NUL separators; the stored signature is
     -- base64 (XML-safe) of that record, so decode_osig(decode_fields + b64decode) must
@@ -697,12 +712,16 @@ TestKnownOsigFixtures = {}
 local function build_known_blob(entries, label, filler)
    local maxpos = 0
    for _, e in ipairs(entries) do
-      if (e.pos > maxpos) then maxpos = e.pos end
+      if e.pos > maxpos then maxpos = e.pos end
    end
    local t = {}
    for i = 1, maxpos do t[i] = string.char(filler) end
    for _, e in ipairs(entries) do
-      t[e.pos] = string.char(e.values[label])
+      local v = e.values[label]
+      -- A don't-care position (false) is not pinned; leave the filler byte.
+      if v ~= false then
+         t[e.pos] = string.char(v)
+      end
    end
    return table.concat(t), maxpos
 end
@@ -727,13 +746,15 @@ function TestKnownOsigFixtures:test_detect_and_patch_every_declared_state()
             "patch detect failed for " .. dev .. " / " .. target)
          -- Non-signature bytes must be untouched; only the declared positions change.
          local sig = {}
-         for _, e in ipairs(entries) do sig[e.pos] = e.values[target] end
+         for _, e in ipairs(entries) do
+            if e.values[target] ~= false then sig[e.pos] = e.values[target] end
+         end
          for i = 1, maxpos do
-            if (sig[i] ~= nil) then
-               lu.assertEquals(string.byte(patched, i), sig[i])
-            else
-               lu.assertEquals(string.byte(patched, i), FILLER)
-            end
+            -- Pinned bytes take the target value; every other byte keeps the source
+            -- blob's byte (a don't-care position may hold a stale non-filler value).
+            local expected = blob:byte(i)
+            if sig[i] ~= nil then expected = sig[i] end
+            lu.assertEquals(patched:byte(i), expected)
          end
       end
    end
@@ -741,7 +762,7 @@ end
 
 function TestKnownOsigFixtures:test_xml_detect_and_patch_preserves_bytes()
    local FILLER = 0xAB
-   for dev, entries in pairs(core.known_osig) do
+   for _, entries in pairs(core.known_osig) do
       local labels = {}
       for lab in pairs(entries[1].values) do labels[#labels + 1] = lab end
       local blob, maxpos = build_known_blob(entries, labels[1], FILLER)
@@ -751,19 +772,72 @@ function TestKnownOsigFixtures:test_xml_detect_and_patch_preserves_bytes()
       local patched_xml = core.patch_osig_xml(xml, entries, target)
       lu.assertNotIsNil(patched_xml)
       lu.assertEquals(core.detect_label_xml(patched_xml, entries), target)
-      -- Decode the result and confirm the filler survived everywhere but the signature.
-      local nb64 = string.match(patched_xml, "CDATA%[([%s%S]-)%]%]")
+      -- Decode the result and confirm only the pinned signature bytes changed.
+      local nb64 = patched_xml:match("CDATA%[([%s%S]-)%]%]")
       local out = core.b64decode(nb64)
       local sig = {}
-      for _, e in ipairs(entries) do sig[e.pos] = e.values[target] end
+      for _, e in ipairs(entries) do
+         if e.values[target] ~= false then sig[e.pos] = e.values[target] end
+      end
       for i = 1, maxpos do
-         if (sig[i] ~= nil) then
-            lu.assertEquals(string.byte(out, i), sig[i])
-         else
-            lu.assertEquals(string.byte(out, i), FILLER)
-         end
+         local expected = blob:byte(i)
+         if sig[i] ~= nil then expected = sig[i] end
+         lu.assertEquals(out:byte(i), expected)
       end
    end
+end
+
+function TestKnownOsigFixtures:test_proq3_zero_latency_ignores_stale_resolution()
+   -- Regression: Pro-Q 3's resolution bytes are irrelevant in Zero Latency / Natural
+   -- Phase, but the plugin keeps whatever resolution was last set. A live chunk can
+   -- therefore carry a stale resolution (e.g. Maximum left over from Linear Phase)
+   -- while in Zero Latency; detection must still recognise it, and Set must not rewrite
+   -- the stale, irrelevant bytes.
+   local entries = core.known_osig["FabFilter: Pro-Q 3"]
+   lu.assertNotIsNil(entries)
+   local blob = build_known_blob(entries, "Zero Latency", 0xAA)
+   -- Overwrite the resolution bytes with Linear Phase / Maximum's values.
+   local t = {}
+   for i = 1, #blob do t[i] = blob:sub(i, i) end
+   t[1315] = string.char(0x80)
+   t[1316] = string.char(0x40)
+   local stale = table.concat(t)
+   lu.assertEquals(core.detect_label(stale, entries), "Zero Latency")
+
+   local patched = core.patch_blob(stale, entries, "Zero Latency")
+   lu.assertEquals(patched:byte(1315), 0x80)
+   lu.assertEquals(patched:byte(1316), 0x40)
+
+   -- Switching to Linear Phase / Maximum from that state writes the full resolution.
+   local to_max = core.patch_blob(stale, entries, "Linear Phase / Maximum")
+   lu.assertEquals(core.detect_label(to_max, entries), "Linear Phase / Maximum")
+end
+
+function TestKnownOsigFixtures:test_proq3_ignores_unstable_trailing_flag_byte()
+   -- Regression: the Pro-Q 3 chunk contains variable-length text after the mode and
+   -- resolution bytes, so the once-learned offset 1554 is not a stable flag (in live
+   -- captures it held "CuS" text or an unrelated byte, shifted by the serialized size).
+   -- Detection must key only on the stable mode/resolution bytes.
+   local entries = core.known_osig["FabFilter: Pro-Q 3"]
+   local function build(mode_lo, mode_hi, res_lo, res_hi, tail)
+      local t = {}
+      for i = 1, 1560 do t[i] = string.char(0) end
+      t[1311] = string.char(mode_lo)
+      t[1312] = string.char(mode_hi)
+      t[1315] = string.char(res_lo)
+      t[1316] = string.char(res_hi)
+      t[1554] = string.char(tail)
+      return table.concat(t)
+   end
+   -- Capture A: Linear Phase / Maximum with 0x00 at the old flag offset.
+   lu.assertEquals(core.detect_label(build(0x00, 0x40, 0x80, 0x40, 0x00), entries),
+      "Linear Phase / Maximum")
+   -- Capture A's layout with the text byte 0x56 ("V") at 1554 instead.
+   lu.assertEquals(core.detect_label(build(0x00, 0x40, 0x80, 0x40, 0x56), entries),
+      "Linear Phase / Maximum")
+   -- Capture B: Zero Latency with a stale resolution and 0x56 at 1554.
+   lu.assertEquals(core.detect_label(build(0x00, 0x00, 0x80, 0x3f, 0x56), entries),
+      "Zero Latency")
 end
 
 --------------------------------------------------------------------------------
@@ -789,7 +863,7 @@ local INDEP_ENTRIES = {
 
 local function build_indep_blob(entries, label, filler)
    local maxpos = 0
-   for _, e in ipairs(entries) do if (e.pos > maxpos) then maxpos = e.pos end end
+   for _, e in ipairs(entries) do if e.pos > maxpos then maxpos = e.pos end end
    local t = {}
    for i = 1, maxpos do t[i] = string.char(filler) end
    for _, e in ipairs(entries) do t[e.pos] = string.char(e.values[label]) end
@@ -810,10 +884,10 @@ function TestOsigIndependentFixtures:test_detect_and_patch_reference_vectors()
       local sig = {}
       for _, e in ipairs(INDEP_ENTRIES) do sig[e.pos] = e.values[target] end
       for i = 1, maxpos do
-         if (sig[i] ~= nil) then
-            lu.assertEquals(string.byte(patched, i), sig[i])
+         if sig[i] ~= nil then
+            lu.assertEquals(patched:byte(i), sig[i])
          else
-            lu.assertEquals(string.byte(patched, i), FILLER)
+            lu.assertEquals(patched:byte(i), FILLER)
          end
       end
    end
@@ -830,15 +904,15 @@ function TestOsigIndependentFixtures:test_xml_detect_and_patch_reference_vectors
       local patched_xml = core.patch_osig_xml(xml, INDEP_ENTRIES, target)
       lu.assertNotIsNil(patched_xml)
       lu.assertEquals(core.detect_label_xml(patched_xml, INDEP_ENTRIES), target)
-      local nb64 = string.match(patched_xml, "CDATA%[([%s%S]-)%]%]")
+      local nb64 = patched_xml:match("CDATA%[([%s%S]-)%]%]")
       local out = core.b64decode(nb64)
       local sig = {}
       for _, e in ipairs(INDEP_ENTRIES) do sig[e.pos] = e.values[target] end
       for i = 1, maxpos do
-         if (sig[i] ~= nil) then
-            lu.assertEquals(string.byte(out, i), sig[i])
+         if sig[i] ~= nil then
+            lu.assertEquals(out:byte(i), sig[i])
          else
-            lu.assertEquals(string.byte(out, i), FILLER)
+            lu.assertEquals(out:byte(i), FILLER)
          end
       end
    end
@@ -858,10 +932,10 @@ function TestChunkPatch:test_patch_splices_large_blob_around_scattered_positions
      local entries = core.diff_blobs_multi({ orig_blob, target_blob }, { "Off", "2x" })
      local patched = core.patch_blob(orig_blob, entries, "2x")
      lu.assertEquals(patched, target_blob)
-     lu.assertEquals(string.len(patched), 200)
+     lu.assertEquals(patched:len(), 200)
      -- Unchanged runs around the patch points are preserved exactly (splice path).
-     lu.assertEquals(string.sub(patched, 2, 99), string.sub(orig_blob, 2, 99))
-     lu.assertEquals(string.sub(patched, 101, 199), string.sub(orig_blob, 101, 199))
+     lu.assertEquals(patched:sub(2, 99), orig_blob:sub(2, 99))
+     lu.assertEquals(patched:sub(101, 199), orig_blob:sub(101, 199))
 end
 
 function TestChunkPatch:test_patch_returns_original_when_no_entries_apply()
@@ -952,8 +1026,8 @@ function TestOsigXml:test_patch_reencodes_and_preserves_structure()
     local xml = self:make_xml(a)
     local patched = core.patch_osig_xml(xml, entries, "2x")
     lu.assertNotIsNil(patched)
-    lu.assertNotIsNil(string.match(patched, "<ParameterChunk><!%[CDATA%["))
-    local nb64 = string.match(patched, "CDATA%[([%s%S]-)%]%]")
+    lu.assertNotIsNil(patched:match("<ParameterChunk><!%[CDATA%["))
+    local nb64 = patched:match("CDATA%[([%s%S]-)%]%]")
     lu.assertEquals(core.b64decode(nb64), b)
 end
 
