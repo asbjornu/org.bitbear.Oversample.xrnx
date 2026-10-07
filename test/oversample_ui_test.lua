@@ -291,7 +291,7 @@ end
 function TestDialogLayout:test_osig_set_patches_vst3_binary_chunk()
    -- Drive the "Set" path for a VST3 device whose oversampling is chunk-driven
    -- (no host parameter). The learned bytes must be written into active_preset_data.
-   local apply = upvalue(set_values, "apply_osig_to_device_name")
+   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
    local osig = state_of(apply).osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
@@ -310,7 +310,7 @@ end
 function TestDialogLayout:test_osig_set_patches_vst3_xml_chunk()
    -- VST3 hosts wrap the chunk in base64 inside <ParameterChunk><![CDATA[…]]></ParameterChunk>;
    -- the Set path must decode, patch, and re-encode the binary, not corrupt the XML.
-   local apply = upvalue(set_values, "apply_osig_to_device_name")
+   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
    local osig = state_of(apply).osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
@@ -331,7 +331,7 @@ end
 function TestDialogLayout:test_osig_set_without_target_toggles_to_next_label()
    -- A row with no explicit target uses the cyclic "toggle": detect current state
    -- ("Off") and step to the next label in sorted order ("2x").
-   local apply = upvalue(set_values, "apply_osig_to_device_name")
+   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
    local osig = state_of(apply).osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
@@ -363,7 +363,7 @@ end
 function TestDialogLayout:test_osig_target_for_row_combines_secondary_safely()
    -- A combined primary label must have its trailing portion replaced by the dependent
    -- secondary, never appended as a third segment (which would match no signature label).
-   local target_for_row = upvalue(set_values, "osig_target_for_row")
+   local target_for_row = upvalue(set_values, "osig").osig_target_for_row
    self.selected[1] = { osig_driven = true, osig_target_label = "Linear Phase / Medium",
       osig_target_label_sec = "High" }
    lu.assertEquals(target_for_row(1), "Linear Phase / High")
@@ -384,7 +384,7 @@ end
 function TestDialogLayout:test_osig_set_toggle_uses_natural_order()
    -- Pro-L 2 natural order is Off, 2x, 4x, 8x, 16x, 32x. Alphabetical sorting would step
    -- Off -> 16x (wrong); the natural order must step Off -> 2x.
-   local apply = upvalue(set_values, "apply_osig_to_device_name")
+   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
    local osig = state_of(apply).osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-L 2"
@@ -452,7 +452,7 @@ function TestDialogLayout:test_update_secondary_osig_multi_axis_clears_stale_sec
 function TestDialogLayout:test_apply_osig_to_device_name_is_fail_closed_on_unrecognized_state()
     -- When the device's current VST3 chunk matches no learned byte, Set must leave the
     -- chunk untouched (fail closed) rather than overwriting it with a guessed patch.
-    local apply = upvalue(set_values, "apply_osig_to_device_name")
+    local apply = upvalue(set_values, "osig").apply_osig_to_device_name
     local osig = state_of(apply).osig
     local devices = self.state.devices
     local norm = "FabFilter: Pro-C 2"

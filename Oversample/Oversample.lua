@@ -48,6 +48,14 @@ local devices = require("Oversample/devices")({
     },
 })
 
+-- Oversampling-signature labels + VST3 chunk patching live in Oversample/osig.lua.
+local osig = require("Oversample/osig")({
+    renoise = renoise,
+    core = core,
+    state = state,
+    devices = devices,
+})
+
 -- Renoise's ViewBuilder has no "fixed column layout" mode and exposes no text
 -- metrics. To keep the Parameter/Value/Secondary columns aligned across every row
 -- we give each control in a column the same fixed width. Those widths are derived
@@ -172,89 +180,6 @@ end
 -- The persistent parameter/device/oversampling-signature cache lives in
 -- Oversample/cache.lua; the coordinator only calls its load/save/prune API.
 
--- The natural, ascending oversampling labels for a device: from
--- known_osig_order when defined, otherwise the distinct labels found in the
--- learned `entries`, sorted alphabetically.
-local function osig_label_order(norm, entries)
-  local known = core.osig_choices(norm)
-  if known then
-    local labels = {}
-    for i, c in ipairs(known) do
-      labels[i] = c.label
-    end
-    return labels
-  end
-  local seen = {}
-  local labels = {}
-  for _, e in ipairs(entries) do
-    for lab in pairs(e.values) do
-      if not seen[lab] then
-        seen[lab] = true
-        labels[#labels + 1] = lab
-      end
-    end
-  end
-  table.sort(labels)
-  return labels
-end
-
--- osig dropdown choices ({ label, value }) for a device, in natural order.
-local function osig_choices_for(norm, entries)
-  local choices = {}
-  for i, lab in ipairs(osig_label_order(norm, entries)) do
-    choices[i] = { label = lab, value = i }
-  end
-  return choices
-end
-
--- The separator used to combine a primary + dependent secondary label into a
--- single osig target key (e.g. "Linear Phase / Maximum").
-local SECONDARY_SEP = " / "
-
--- Split a combined "axis1 / axis2" osig label; a label without the separator
--- yields the label itself and nil for the second axis.
-local function split_target_label(label)
-  if type(label) ~= "string" then
-    return label, nil
-  end
-  local sep = label:find(SECONDARY_SEP, 1, true)
-  if not sep then
-    return label, nil
-  end
-  return label:sub(1, sep - 1), label:sub(sep + #SECONDARY_SEP)
-end
-
--- Combine two independent axis labels into a single osig target key; a missing
--- or empty second axis leaves the primary label unchanged.
-local function join_target_label(axis1, axis2)
-  if not axis2 or axis2 == "" then
-    return axis1
-  end
-  return axis1 .. SECONDARY_SEP .. axis2
-end
-
--- Compute the combined osig target label for a row (primary, plus secondary when
--- one is active). Returns nil for non-osig-driven rows.
-local function osig_target_for_row(row_number)
-  local sd = state.selected_devices[row_number]
-  if not sd or not sd.osig_driven then
-    return nil
-  end
-  local primary = sd.osig_target_label
-  local sec = sd.osig_target_label_sec
-  if not sec then
-    return primary
-  end
-  if not primary then
-    return sec
-  end
-  -- A primary can itself be a combined label (e.g. Pro-Q 3's "Linear Phase / Medium");
-  -- the dependent secondary replaces the trailing portion (the axis-1 value before the
-  -- first " / "), so we never append a third segment that matches no signature label
-  -- (e.g. "Linear Phase / Medium / High").
-  local axis1 = split_target_label(primary)
-  return axis1 .. SECONDARY_SEP .. sec
-end
 
 on_song_devices_changed = function()
   cache.prune_parameter_cache()
@@ -552,7 +477,7 @@ function create_settings_row()
                             if a2 == nil and axes and axes[2] then
                                 a2 = axes[2].labels[1]
                             end
-                            state.selected_devices[row_number].osig_target_label = join_target_label(lbl, a2)
+                            state.selected_devices[row_number].osig_target_label = osig.join_target_label(lbl, a2)
                         else
                             state.selected_devices[row_number].osig_target_label = lbl
                             state.selected_devices[row_number].osig_target_label_sec = nil
@@ -621,10 +546,10 @@ function create_settings_row()
                             local sec_labels = axes and axes[2] and axes[2].labels
                             if sec_labels and sec_labels[value] then
                                 local a2 = sec_labels[value]
-                                local a1 = split_target_label(
+                                local a1 = osig.split_target_label(
                                     state.selected_devices[row_number].osig_target_label)
                                 state.selected_devices[row_number].osig_axis2_label = a2
-                                state.selected_devices[row_number].osig_target_label = join_target_label(a1, a2)
+                                state.selected_devices[row_number].osig_target_label = osig.join_target_label(a1, a2)
                             end
                         else
                             -- VST3 row: record the chosen secondary label for the combined
@@ -1084,7 +1009,7 @@ local function update_secondary_osig(row_number, device_name)
     -- already implies (e.g. the "Maximum" in "Linear Phase / Maximum"), used to seed the
     -- secondary so Minimize/Maximize land on the correct resolution rather than the
     -- first choice.
-    local primary_axis, primary_suffix = split_target_label(primary_label)
+    local primary_axis, primary_suffix = osig.split_target_label(primary_label)
     if not primary_label or not loose_eq(primary_axis, SECONDARY_SHOW_WHEN) then
         hide_secondary()
         return
@@ -1315,12 +1240,12 @@ local function show_osig_dropdown(row_number, device_name, device_instances,
         -- target_label is the combined "axis1 / axis2"; the primary popup only shows
         -- axis1, and the secondary popup (filled by update_secondary) shows axis2.
         local axes = state.selected_devices[row_number].osig_axes
-        local a1, a2 = split_target_label(target_label)
+        local a1, a2 = osig.split_target_label(target_label)
         if type(target_label) == "string" and a2 == nil then
             -- No separator: default the second axis to its first (off) label so the
             -- stored target is always the full combined key.
             a2 = axes[2] and axes[2].labels[1]
-            target_label = a1 .. SECONDARY_SEP .. (a2 or "")
+            target_label = a1 .. osig.SECONDARY_SEP .. (a2 or "")
             state.selected_devices[row_number].osig_target_label = target_label
         end
         state.selected_devices[row_number].osig_axis2_label = a2
@@ -1383,7 +1308,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
         -- keys (which would then fail to match any signature label).
         state.selected_devices[row_number].osig_multi_axis = nil
         state.selected_devices[row_number].osig_axes = nil
-        local choices = osig_choices_for(norm, sig)
+        local choices = osig.osig_choices_for(norm, sig)
         -- A dependent secondary (e.g. Pro-Q 3's "Processing Resolution") is driven by a
         -- sibling device that exposes the host parameter; pass it through so the secondary
         -- dropdown can appear (update_secondary_osig needs the sibling to read its values).
@@ -1417,7 +1342,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     -- parameter and are handled by the sibling/parameter paths below.
     if device_name:sub(1, 5) == "VST3:" and entries and #entries > 0 then
         show_osig_dropdown(row_number, device_name, device_instances,
-            osig_choices_for(norm, entries), parameter_name, nil, nil)
+            osig.osig_choices_for(norm, entries), parameter_name, nil, nil)
         return
     end
     -- Fallback: borrow labels from a sibling device of the same plugin if present.
@@ -1596,7 +1521,7 @@ function extreme_values(extreme)
                         local a2 = axes[2].labels
                         local c1 = (extreme == "min") and a1[1] or a1[#a1]
                         local c2 = (extreme == "min") and a2[1] or a2[#a2]
-                        selected_device.osig_target_label = c1 .. SECONDARY_SEP .. c2
+                        selected_device.osig_target_label = c1 .. osig.SECONDARY_SEP .. c2
                         selected_device.osig_axis2_label = c2
                     else
                         local choices = selected_device.parameter_choices
@@ -1666,7 +1591,7 @@ function extreme_values(extreme)
                 if state.selected_devices[row_number].osig_multi_axis then
                     -- target_label is the combined "axis1 / axis2"; show axis1 in the
                     -- primary popup and let update_secondary place axis2 in the secondary.
-                    local a1, a2 = split_target_label(target_label)
+                    local a1, a2 = osig.split_target_label(target_label)
                     state.selected_devices[row_number].osig_axis2_label = a2
                     if choices then
                         for i, c in ipairs(choices) do
@@ -1780,106 +1705,6 @@ function set_main_buttons_active(active)
     end
 end
 
---------------------------------------------------------------------------------
--- VST3 state-chunk fallback.
---
--- When a device's oversampling is not exposed as a host parameter (so there is no
--- parameter_index to drive) but a calibration signature exists, flip the learned
--- bytes directly in the plugin's raw 'active_preset_data' blob. Returns the number
--- of device instances whose state chunk was actually changed; blobs already at the
--- target are a successful no-op and are not counted.
-
-local function apply_osig_to_device_name(device_name, target, save_state)
-  -- osig state-chunk signatures are VST3-only; applying them to an AU/VST2 build
-  -- would patch the wrong bytes. Guard here as the last line of defense even though
-  -- the UI only marks rows osig_driven for VST3 devices.
-  if device_name:sub(1, 5) ~= "VST3:" then
-    return 0
-  end
-  local norm = core.normalize_device_name(device_name)
-  local entries = state.osig[norm]
-  if not entries or #entries == 0 then
-    return 0
-  end
-  -- Renoise caches a VST3 plugin's serialized state; refresh it from the live GUI
-  -- (by saving first) so we patch the current state and never revert the user's
-  -- other settings. Guarded so an unsaved song never triggers a save dialog.
-  -- `save_state.saved` ensures the song is refreshed at most once across all osig
-  -- rows applied in a single Set action.
-  local song = renoise.song()
-  if not save_state.saved and song.file_name and song.file_name ~= "" then
-    pcall(function() song:save() end)
-    save_state.saved = true
-  end
-  -- "toggle" resolves to a concrete label: detect the current value, then step to
-  -- the next one in the device's natural oversampling order (cyclic). This keeps a
-  -- single toggle button useful even though oversampling is now multi-valued.
-  if target == "toggle" then
-    local dev0 = devices.ensure_device_instances(device_name)[1]
-    local cur = nil
-    if dev0 then
-      local ok, blob = pcall(function() return dev0.active_preset_data end)
-      if ok and type(blob) == "string" and blob ~= "" then
-        if blob:match("<ParameterChunk>") then
-          cur = core.detect_label_xml(blob, entries)
-        else
-          cur = core.detect_label(blob, entries)
-        end
-      end
-    end
-    -- Prefer the device's explicit oversampling order (e.g. 2x before 16x); only fall
-    -- back to alphabetical sorting when no natural order is defined.
-    local ordered = osig_label_order(norm, entries)
-    if cur then
-      for i, lab in ipairs(ordered) do
-        if lab == cur then
-          target = ordered[(i % #ordered) + 1]
-          break
-        end
-      end
-    else
-      target = ordered[1]
-    end
-  end
-  local instances = devices.ensure_device_instances(device_name)
-  local changed = 0
-  for _, dev in ipairs(instances) do
-    local ok, xml = pcall(function() return dev.active_preset_data end)
-    if ok and type(xml) == "string" and xml ~= "" then
-      local is_xml = xml:match("<ParameterChunk>")
-      -- Fail closed: only patch when the current chunk is a recognized oversampling
-      -- state for this device. After a plugin update or with a stale signature the
-      -- learned bytes no longer describe the real state, and writing the target would
-      -- overwrite unrelated bytes; skipping keeps the device intact.
-      local cur = is_xml and core.detect_label_xml(xml, entries) or core.detect_label(xml, entries)
-      if not cur then
-        print("OVERSAMPLE osig apply skipped for '" .. tostring(device_name)
-          .. "': current state is not a recognized oversampling signature")
-      else
-        local newdata
-        if is_xml then
-          -- patch_osig_xml returns nil only when the target bytes already match the
-          -- current state (no change needed — e.g. two oversampling labels that
-          -- serialize to identical chunks). That is a successful no-op, not an error.
-          newdata = core.patch_osig_xml(xml, entries, target)
-        else
-          newdata = core.patch_blob(xml, entries, target)
-        end
-        if newdata and newdata ~= xml then
-          local ok2, err = pcall(function()
-            dev.active_preset_data = newdata
-          end)
-          if ok2 then
-            changed = changed + 1
-          else
-            print("OVERSAMPLE osig apply failed for '" .. tostring(device_name) .. "': " .. tostring(err))
-          end
-        end
-      end
-    end
-  end
-  return changed
-end
 
 function set_values()
     set_main_buttons_active(false)
@@ -1902,8 +1727,9 @@ function set_values()
         -- signature, set the exact value directly in the raw preset data instead.
         local param_index = selected_device.parameter_index
         if selected_device.osig_driven then
-            local target = osig_target_for_row(row_number) or "toggle"
-            parameters_changed = parameters_changed + apply_osig_to_device_name(device_name, target, osig_save_state)
+            local target = osig.osig_target_for_row(row_number) or "toggle"
+            parameters_changed = parameters_changed
+                + osig.apply_osig_to_device_name(device_name, target, osig_save_state)
         elseif param_index ~= nil then
             for _, device in ipairs(device_instances) do
                 local count = devices.count_parameters(device)
