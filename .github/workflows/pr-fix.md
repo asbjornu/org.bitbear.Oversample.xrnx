@@ -192,9 +192,15 @@ raised, using the OpenCode CLI.
    `copilot-pull-request-reviewer`, or `copilot-pull-request-reviewer[bot]`. Do
    not re-fix threads that are already resolved.
    Also use `get_pull_request_reviews` to read the most recent Copilot review
-   body; if it lists findings under "Suppressed comments" (which have no
-   thread), treat the concrete ones as actionable too. The orchestrator
-   dispatches this workflow for exactly those body-only reviews.
+   body and treat its concrete, actionable items as issues even when they have
+   no inline thread. That includes findings under "Suppressed comments" and the
+   overview's "Needs a closer look" / "Changes recommended" bullets: a specific
+   request such as "add integration coverage for X" or "use list_count for Y" is
+   actionable. Ignore only informational summaries that request no change. The
+   orchestrator dispatches this workflow for exactly those body-only reviews.
+   For every body-level item in the most recent review, decide and record an
+   outcome: the fix you applied (file:line) or a one-line reason it is
+   informational and needs no change. Leave no overview bullet unaccounted for.
    Before acting, confirm the newest Copilot review's `commit_id` equals the
    PR's current head (`get_pull_request` -> `head.sha`). If they differ, the
    review is stale because the branch moved after it was posted: call the
@@ -251,7 +257,10 @@ raised, using the OpenCode CLI.
    - For every unresolved Copilot thread you did NOT fix, reply once with a
      one-line rationale (not actionable / already addressed / obsolete).
    - Then call the `add_comment` safe-output tool once with a short summary of
-     how the review's complaints were addressed overall.
+     how the review's complaints were addressed overall. The summary must list
+     every body-level review item (overview bullets and "Suppressed comments"
+     findings) with its disposition: the fix applied (file:line), or a one-line
+     reason it is informational. Never leave a body-level item unmentioned.
 
 5. Resolve only the Copilot threads you actually fixed: for each such thread
    call the `resolve_pull_request_review_thread` safe-output tool with its
@@ -260,7 +269,10 @@ raised, using the OpenCode CLI.
 
 6. If and only if you committed a fix, push it to the target pull request's
    branch by calling the `push_to_pull_request_branch` safe output. If you made
-   no changes, do NOT push; call the `noop` safe output with a short reason.
+   no changes, do NOT push; call the `noop` safe output with a reason that names
+   every body-level review item (overview bullets and "Suppressed comments"
+   findings) and states, for each, the one-line reason it is informational and
+   needs no change.
 
 If the repository's automatic Copilot code review is enabled, your push
 triggers a fresh review; otherwise a maintainer re-requests it. The loop ends
