@@ -39,9 +39,9 @@ core.known_devices_parameters = {
 -- { pos = 1-based byte offset, values = { [label] = byte } }. The bytes were learned
 -- by diffing saved .xrns Song.xml ParameterChunk blobs across every oversampling
 -- value; every source->target patch reproduces the exact saved chunk. Pro-Q 3 uses
--- 5 bytes (mode 1311/1312, resolution 1315/1316, flag 1554); Pro-C 2 / Pro-L 2 use 2
--- bytes; Pro-MB uses 4; Saturn 2 uses 5. Labels match the dropdown strings the tool
--- shows for each device.
+-- 4 bytes (mode 1311/1312, resolution 1315/1316; the resolution is don't-care in
+-- Zero Latency / Natural Phase); Pro-C 2 / Pro-L 2 use 2 bytes; Pro-MB uses 4;
+-- Saturn 2 uses 5. Labels match the dropdown strings the tool shows for each device.
 core.known_osig = {
    ['FabFilter: Pro-Q 3'] = {
       { pos = 1311, values = {
@@ -69,11 +69,11 @@ core.known_osig = {
             ['Linear Phase / Low'] = 0x00, ['Linear Phase / Medium'] = 0x3f,
             ['Linear Phase / High'] = 0x40, ['Linear Phase / Very High'] = 0x40,
             ['Linear Phase / Maximum'] = 0x40 } },
-      { pos = 1554, values = {
-            ['Zero Latency'] = 0x00, ['Natural Phase'] = 0x01,
-            ['Linear Phase / Low'] = 0x01, ['Linear Phase / Medium'] = 0x01,
-            ['Linear Phase / High'] = 0x01, ['Linear Phase / Very High'] = 0x01,
-            ['Linear Phase / Maximum'] = 0x01 } },
+      -- The learned "flag" at 1554 is NOT included: it sits inside a variable-length
+      -- region (the chunk contains ASCII text right after it), so its offset shifts with
+      -- the serialized size and it is not a stable flag. The mode bytes 1311/1312 already
+      -- distinguish Zero Latency / Natural Phase / Linear Phase uniquely, so 1554 is also
+      -- redundant; omitting it keeps detection robust to the shifting layout.
    },
    ['FabFilter: Pro-C 2'] = {
       { pos = 246, values = {

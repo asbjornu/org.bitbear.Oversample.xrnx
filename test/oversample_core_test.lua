@@ -813,6 +813,33 @@ function TestKnownOsigFixtures:test_proq3_zero_latency_ignores_stale_resolution(
    lu.assertEquals(core.detect_label(to_max, entries), "Linear Phase / Maximum")
 end
 
+function TestKnownOsigFixtures:test_proq3_ignores_unstable_trailing_flag_byte()
+   -- Regression: the Pro-Q 3 chunk contains variable-length text after the mode and
+   -- resolution bytes, so the once-learned offset 1554 is not a stable flag (in live
+   -- captures it held "CuS" text or an unrelated byte, shifted by the serialized size).
+   -- Detection must key only on the stable mode/resolution bytes.
+   local entries = core.known_osig["FabFilter: Pro-Q 3"]
+   local function build(mode_lo, mode_hi, res_lo, res_hi, tail)
+      local t = {}
+      for i = 1, 1560 do t[i] = string.char(0) end
+      t[1311] = string.char(mode_lo)
+      t[1312] = string.char(mode_hi)
+      t[1315] = string.char(res_lo)
+      t[1316] = string.char(res_hi)
+      t[1554] = string.char(tail)
+      return table.concat(t)
+   end
+   -- Capture A: Linear Phase / Maximum with 0x00 at the old flag offset.
+   lu.assertEquals(core.detect_label(build(0x00, 0x40, 0x80, 0x40, 0x00), entries),
+      "Linear Phase / Maximum")
+   -- Capture A's layout with the text byte 0x56 ("V") at 1554 instead.
+   lu.assertEquals(core.detect_label(build(0x00, 0x40, 0x80, 0x40, 0x56), entries),
+      "Linear Phase / Maximum")
+   -- Capture B: Zero Latency with a stale resolution and 0x56 at 1554.
+   lu.assertEquals(core.detect_label(build(0x00, 0x00, 0x80, 0x3f, 0x56), entries),
+      "Zero Latency")
+end
+
 --------------------------------------------------------------------------------
 -- Independent reference fixtures (NOT derived from core.known_osig)
 --
