@@ -608,4 +608,37 @@ function TestDialogLayout:test_set_main_buttons_active_toggles_actions_and_rows(
     lu.assertTrue(self.views[self.ids.add_button_id].active)
 end
 
+function TestDialogLayout:test_require_returns_module_api_without_global_leak()
+    -- main.lua consumes the tool through require(); lock in that boundary so a
+    -- refactor cannot silently rename the entry points or leak the implementation
+    -- into the global environment.
+    package.loaded["Oversample/Oversample"] = nil
+    local module = require("Oversample/Oversample")
+
+    lu.assertIsTable(module)
+    lu.assertEquals(type(module.oversample_init), "function")
+    lu.assertEquals(type(module.oversample), "function")
+    -- require() caches the module table.
+    lu.assertEquals(require("Oversample/Oversample"), module)
+
+    -- The white-box surface the UI bootstrap relies on stays exported.
+    for _, name in ipairs({
+        "destroy", "load_tool_cache", "save_tool_cache", "create_settings_row",
+        "update_secondary", "device_selected", "parameter_selected",
+        "refresh_device_popups", "add_device_items", "set_main_buttons_active",
+        "set_values",
+    }) do
+        lu.assertEquals(type(module[name]), "function", "missing module API: " .. name)
+    end
+
+    -- The implementation stays module-local: nothing leaks into _G.
+    for _, name in ipairs({
+        "oversample_init", "oversample", "destroy", "load_tool_cache",
+        "create_settings_row", "update_secondary", "device_selected",
+        "parameter_selected", "set_values",
+    }) do
+        lu.assertIsNil(rawget(_G, name), "module leaked global " .. name)
+    end
+end
+
 os.exit(lu.LuaUnit.run())
