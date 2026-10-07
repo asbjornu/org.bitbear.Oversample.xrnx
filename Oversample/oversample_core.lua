@@ -54,13 +54,18 @@ core.known_osig = {
             ['Linear Phase / Low'] = 0x40, ['Linear Phase / Medium'] = 0x40,
             ['Linear Phase / High'] = 0x40, ['Linear Phase / Very High'] = 0x40,
             ['Linear Phase / Maximum'] = 0x40 } },
+      -- Resolution bytes (1315/1316) are irrelevant unless the mode is Linear Phase:
+      -- the plugin keeps whatever resolution was last set while in Zero Latency or
+      -- Natural Phase. Mark them don't-care (false) for those modes so detection does
+      -- not fail when the stale value differs from the one the signature was learned
+      -- with, and so Set never rewrites them.
       { pos = 1315, values = {
-            ['Zero Latency'] = 0x80, ['Natural Phase'] = 0x80,
+            ['Zero Latency'] = false, ['Natural Phase'] = false,
             ['Linear Phase / Low'] = 0x00, ['Linear Phase / Medium'] = 0x80,
             ['Linear Phase / High'] = 0x00, ['Linear Phase / Very High'] = 0x40,
             ['Linear Phase / Maximum'] = 0x80 } },
       { pos = 1316, values = {
-            ['Zero Latency'] = 0x3f, ['Natural Phase'] = 0x3f,
+            ['Zero Latency'] = false, ['Natural Phase'] = false,
             ['Linear Phase / Low'] = 0x00, ['Linear Phase / Medium'] = 0x3f,
             ['Linear Phase / High'] = 0x40, ['Linear Phase / Very High'] = 0x40,
             ['Linear Phase / Maximum'] = 0x40 } },
@@ -537,7 +542,9 @@ function core.patch_blob(blob, entries, target)
    local patches = {}
    for _, e in ipairs(entries) do
       local b = e.values[target]
-      if b ~= nil and e.pos >= 1 and e.pos <= n then
+      -- `false` marks an explicit don't-care position for this target; skip it so an
+      -- irrelevant byte (e.g. Pro-Q 3's resolution while in Zero Latency) is untouched.
+      if b ~= nil and b ~= false and e.pos >= 1 and e.pos <= n then
          patches[e.pos] = b
       end
    end
@@ -586,26 +593,33 @@ function core.detect_label(blob, entries)
       end
    end
    table.sort(label_list)
-   local best, best_defined = nil, 0
+   local best, best_required = nil, 0
    for _, lab in ipairs(label_list) do
       local score = 0
-      local defined = 0
+      local required = 0
+      local covered = true
       for _, e in ipairs(entries) do
          local b = e.values[lab]
-         if b ~= nil then
-            defined = defined + 1
+         if b == nil then
+            -- A label missing at a learned position is an incomplete signature; reject it
+            -- rather than matching on the remaining subset (fail closed).
+            covered = false
+            break
+         elseif b ~= false then
+            -- `false` is an explicit don't-care position (e.g. Pro-Q 3's resolution bytes
+            -- while in Zero Latency / Natural Phase): it need not match and does not count
+            -- toward specificity.
+            required = required + 1
             if e.pos >= 1 and e.pos <= n and blob:byte(e.pos) == b then
                score = score + 1
             end
          end
       end
-      -- Fail closed: only report a match when the label is defined for every learned
-      -- position AND each aligns. A structurally incomplete cached signature (a label
-      -- missing at some position) would otherwise match on its single present byte and
-      -- patch_blob would apply a target using only that subset of offsets, defeating the
-      -- fail-closed protection. Ties are broken deterministically by the sorted label order.
-      if defined == #entries and score == defined and defined > best_defined then
-         best_defined = defined
+      -- Fail closed: the label must be accounted for at every learned position, must pin
+      -- at least one byte, and every pinned byte must align. Prefer the label that pins the
+      -- most bytes (most specific). Ties break by the deterministic sorted label order.
+      if covered and required > 0 and score == required and required > best_required then
+         best_required = required
          best = lab
       end
    end
@@ -731,8 +745,11 @@ function core.encode_osig(entries)
       table.sort(labels)
       local parts = { tostring(e.pos) }
       for _, lab in ipairs(labels) do
+         local v = e.values[lab]
          parts[#parts + 1] = lab
-         parts[#parts + 1] = tostring(e.values[lab])
+         -- `false` (an explicit don't-care byte) serializes as the printable token
+         -- "any"; decode_osig reverses it. Plain bytes stay decimal.
+         parts[#parts + 1] = (v == false) and "any" or tostring(v)
       end
       -- The inner "pos\0label\0byte…" record holds literal NUL separators, which are not
       -- valid XML characters; the encoded signature is serialized into Renoise
@@ -775,12 +792,18 @@ function core.decode_osig(str)
              end
              local seen_label = {}
              for i = 2, #parts, 2 do
-                local lab = parts[i]
-                local byte = tonumber(parts[i + 1])
-                if byte == nil or byte ~= math.floor(byte) or byte < 0 or byte > 255 then
-                   ok = false
-                   break
-                end
+                 local lab = parts[i]
+                 local token = parts[i + 1]
+                 local byte
+                 if token == "any" then
+                    byte = false
+                 else
+                    byte = tonumber(token)
+                    if byte == nil or byte ~= math.floor(byte) or byte < 0 or byte > 255 then
+                       ok = false
+                       break
+                    end
+                 end
                 -- A label repeated within one entry is a contradictory record; reject it rather
                 -- than letting the last value silently win.
                 if seen_label[lab] then

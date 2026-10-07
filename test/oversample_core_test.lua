@@ -543,6 +543,21 @@ function TestChunkPatch:test_osig_encode_decode_round_trip()
     lu.assertEquals(decoded, entries)
 end
 
+function TestChunkPatch:test_osig_round_trips_dont_care_marker()
+    -- A don't-care byte (false) must survive encode/decode, and decode must accept the
+    -- "any" token rather than treating it as a malformed byte.
+    local entries = {
+       { pos = 3, values = { Zero = false, Linear = 0x40 } },
+       { pos = 9, values = { Zero = 0, Linear = 0x40 } },
+    }
+    lu.assertEquals(core.decode_osig(core.encode_osig(entries)), entries)
+
+    local field = table.concat({ "3", "Zero", "any", "Linear", "64" }, "\0")
+    lu.assertEquals(core.decode_osig(core.encode_field(core.b64encode(field))), {
+       { pos = 3, values = { Zero = false, Linear = 64 } },
+    })
+end
+
 function TestChunkPatch:test_osig_decode_splits_nul_delimited_fields()
     -- The inner record still uses literal NUL separators; the stored signature is
     -- base64 (XML-safe) of that record, so decode_osig(decode_fields + b64decode) must
@@ -702,7 +717,11 @@ local function build_known_blob(entries, label, filler)
    local t = {}
    for i = 1, maxpos do t[i] = string.char(filler) end
    for _, e in ipairs(entries) do
-      t[e.pos] = string.char(e.values[label])
+      local v = e.values[label]
+      -- A don't-care position (false) is not pinned; leave the filler byte.
+      if v ~= false then
+         t[e.pos] = string.char(v)
+      end
    end
    return table.concat(t), maxpos
 end
@@ -727,13 +746,15 @@ function TestKnownOsigFixtures:test_detect_and_patch_every_declared_state()
             "patch detect failed for " .. dev .. " / " .. target)
          -- Non-signature bytes must be untouched; only the declared positions change.
          local sig = {}
-         for _, e in ipairs(entries) do sig[e.pos] = e.values[target] end
+         for _, e in ipairs(entries) do
+            if e.values[target] ~= false then sig[e.pos] = e.values[target] end
+         end
          for i = 1, maxpos do
-            if sig[i] ~= nil then
-               lu.assertEquals(patched:byte(i), sig[i])
-            else
-               lu.assertEquals(patched:byte(i), FILLER)
-            end
+            -- Pinned bytes take the target value; every other byte keeps the source
+            -- blob's byte (a don't-care position may hold a stale non-filler value).
+            local expected = blob:byte(i)
+            if sig[i] ~= nil then expected = sig[i] end
+            lu.assertEquals(patched:byte(i), expected)
          end
       end
    end
@@ -751,19 +772,45 @@ function TestKnownOsigFixtures:test_xml_detect_and_patch_preserves_bytes()
       local patched_xml = core.patch_osig_xml(xml, entries, target)
       lu.assertNotIsNil(patched_xml)
       lu.assertEquals(core.detect_label_xml(patched_xml, entries), target)
-      -- Decode the result and confirm the filler survived everywhere but the signature.
+      -- Decode the result and confirm only the pinned signature bytes changed.
       local nb64 = patched_xml:match("CDATA%[([%s%S]-)%]%]")
       local out = core.b64decode(nb64)
       local sig = {}
-      for _, e in ipairs(entries) do sig[e.pos] = e.values[target] end
+      for _, e in ipairs(entries) do
+         if e.values[target] ~= false then sig[e.pos] = e.values[target] end
+      end
       for i = 1, maxpos do
-         if sig[i] ~= nil then
-            lu.assertEquals(out:byte(i), sig[i])
-         else
-            lu.assertEquals(out:byte(i), FILLER)
-         end
+         local expected = blob:byte(i)
+         if sig[i] ~= nil then expected = sig[i] end
+         lu.assertEquals(out:byte(i), expected)
       end
    end
+end
+
+function TestKnownOsigFixtures:test_proq3_zero_latency_ignores_stale_resolution()
+   -- Regression: Pro-Q 3's resolution bytes are irrelevant in Zero Latency / Natural
+   -- Phase, but the plugin keeps whatever resolution was last set. A live chunk can
+   -- therefore carry a stale resolution (e.g. Maximum left over from Linear Phase)
+   -- while in Zero Latency; detection must still recognise it, and Set must not rewrite
+   -- the stale, irrelevant bytes.
+   local entries = core.known_osig["FabFilter: Pro-Q 3"]
+   lu.assertNotIsNil(entries)
+   local blob = build_known_blob(entries, "Zero Latency", 0xAA)
+   -- Overwrite the resolution bytes with Linear Phase / Maximum's values.
+   local t = {}
+   for i = 1, #blob do t[i] = blob:sub(i, i) end
+   t[1315] = string.char(0x80)
+   t[1316] = string.char(0x40)
+   local stale = table.concat(t)
+   lu.assertEquals(core.detect_label(stale, entries), "Zero Latency")
+
+   local patched = core.patch_blob(stale, entries, "Zero Latency")
+   lu.assertEquals(patched:byte(1315), 0x80)
+   lu.assertEquals(patched:byte(1316), 0x40)
+
+   -- Switching to Linear Phase / Maximum from that state writes the full resolution.
+   local to_max = core.patch_blob(stale, entries, "Linear Phase / Maximum")
+   lu.assertEquals(core.detect_label(to_max, entries), "Linear Phase / Maximum")
 end
 
 --------------------------------------------------------------------------------
