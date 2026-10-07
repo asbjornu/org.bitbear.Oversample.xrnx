@@ -43,6 +43,9 @@ network:
     - api.githubcopilot.com
     - copilot
 safe-outputs:
+  # Failures are surfaced as comments on the PR under repair (see
+  # pr-fix-orchestrator.yml), so do not also auto-file a separate [aw] issue.
+  report-failure-as-issue: false
   push-to-pull-request-branch:
     max: 1
     signed-commits: false
