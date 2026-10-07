@@ -15,13 +15,12 @@ local list_count = cache.list_count
 -- Every function below is a module-local. These forward declarations exist only
 -- so mutually recursive helpers can be referenced before they are defined; the
 -- definitions use `function name(...)` and assign to the local.
-local on_device_preset_changed, oversample_on_new_song, oversample_init
+local on_song_devices_changed, oversample_on_new_song, oversample_init
 local oversample, destroy, create_settings_row, render_settings_rows
 local add_device_items_init, add_device_items, refresh_device_popups
 local add_rows_for_new_known_devices, update_secondary, device_selected
-local parameter_selected, parameter_value_changed, enumerate_tracks
-local enumerate_devices, get_parameters, count_parameters
-local enumerate_parameters, extreme_values, set_main_buttons_active
+local parameter_selected, parameter_value_changed
+local extreme_values, set_main_buttons_active
 local set_values
 
 local vb = renoise.ViewBuilder()
@@ -30,6 +29,24 @@ local CONTENT_MARGIN = renoise.ViewBuilder.DEFAULT_CONTROL_MARGIN
 local CONTENT_HEIGHT = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
 local COLUMN_WIDTH = 16 * CONTENT_HEIGHT
 local HALF_COLUMN_WIDTH = 8 * CONTENT_HEIGHT
+
+-- Song scanning/instances live in Oversample/devices.lua; the UI callbacks are
+-- injected as closures over the coordinator's forward-declared locals.
+local devices = require("Oversample/devices")({
+    renoise = renoise,
+    core = core,
+    state = state,
+    list_count = list_count,
+    -- ProcessSlicer is a Renoise global installed by main.lua *after* this module
+    -- is required, so resolve it lazily inside the callback rather than reading the
+    -- undeclared global at load time.
+    process_slicer = function(...) return ProcessSlicer(...) end,
+    ui = {
+        vb = vb,
+        set_main_buttons_active = function(active) set_main_buttons_active(active) end,
+        on_song_devices_changed = function() on_song_devices_changed() end,
+    },
+})
 
 -- Renoise's ViewBuilder has no "fixed column layout" mode and exposes no text
 -- metrics. To keep the Parameter/Value/Secondary columns aligned across every row
@@ -154,107 +171,6 @@ end
 
 -- The persistent parameter/device/oversampling-signature cache lives in
 -- Oversample/cache.lua; the coordinator only calls its load/save/prune API.
--- The ordered list of device names currently in the song (tight loop, no
--- per-device yields). Used to refresh the persisted name list and to reconcile
--- the cache against the live song on open.
-local function collect_device_names()
-  local names = {}
-  local seen = {}
-  local song = renoise.song()
-  for t = 1, list_count(song.tracks) do
-    local track = song:track(t)
-    for d = 1, list_count(track.devices) do
-      local device = track:device(d)
-      if device.is_active and not seen[device.name] then
-        seen[device.name] = true
-        names[#names + 1] = device.name
-      end
-    end
-  end
-  return names
-end
-
--- same_name_set is provided by the core module.
-
--- Lazily resolve the live device instances for a device name. The full device
--- scan collects these once; afterwards we reuse the cached map, and if a name
--- is needed before that scan has run we walk the song directly (and wire up the
--- preset-change notifier so the parameter cache still invalidates).
-local function ensure_device_instances(device_name)
-  local entry = state.devices[device_name]
-  if entry and entry.instances and #entry.instances > 0 then
-    return entry.instances
-  end
-
-  local instances = {}
-  local song = renoise.song()
-  for t = 1, list_count(song.tracks) do
-    local track = song:track(t)
-    for d = 1, list_count(track.devices) do
-      local device = track:device(d)
-      if device.is_active and device.name == device_name then
-        instances[#instances + 1] = device
-        pcall(function()
-          device.active_preset_observable:remove_notifier(on_device_preset_changed)
-          device.active_preset_observable:add_notifier(function()
-            on_device_preset_changed(device)
-          end)
-        end)
-      end
-    end
-  end
-
-  if not state.devices[device_name] then state.devices[device_name] = {} end
-  state.devices[device_name].instances = instances
-  return instances
-end
-
--- The exposed parameter names of a device, in 1-based parameter-index order.
-local function parameter_names(device)
-  local names = {}
-  for p = 1, count_parameters(device) do
-    names[p] = device:parameter(p).name
-  end
-  return names
-end
-
--- Find another device in the song that is the same plugin (matched by normalised
--- name) but a different build, and which exposes the given parameter. This is how
--- we obtain dropdown labels for a VST3 device whose oversampling parameter is not
--- host-exposed: we borrow them from the VST2 build of the same plugin. The VST2
--- build is preferred but any exposing sibling is accepted. Returns the device, or
--- nil when none qualifies.
-local function find_sibling_device(device_name, parameter_name)
-  local norm = core.normalize_device_name(device_name)
-  local song = renoise.song()
-  local fallback = nil
-  for t = 1, list_count(song.tracks) do
-    local track = song:track(t)
-    for d = 1, list_count(track.devices) do
-      local dev = track:device(d)
-      if dev.is_active and core.normalize_device_name(dev.name) == norm
-          and dev.name ~= device_name then
-        if match_parameter(parameter_names(dev), parameter_name) then
-          if dev.name:sub(1, 4) == "VST:" then
-            return dev
-          end
-          fallback = fallback or dev
-        end
-      end
-    end
-  end
-  return fallback
-end
-
--- Locate a sibling build of the same plugin that exposes `parameter_name` and the
--- 1-based index of that parameter. Returns sibling, index (both nil when absent).
-local function resolve_sibling_parameter(device_name, parameter_name)
-  local sibling = find_sibling_device(device_name, parameter_name)
-  if not sibling then
-    return nil, nil
-  end
-  return sibling, match_parameter(parameter_names(sibling), parameter_name)
-end
 
 -- The natural, ascending oversampling labels for a device: from
 -- known_osig_order when defined, otherwise the distinct labels found in the
@@ -340,10 +256,10 @@ local function osig_target_for_row(row_number)
   return axis1 .. SECONDARY_SEP .. sec
 end
 
-local on_song_devices_changed = function()
+on_song_devices_changed = function()
   cache.prune_parameter_cache()
   state.devices_valid = false
-  state.cached_device_names = collect_device_names()
+  state.cached_device_names = devices.collect_device_names()
   state.device_names_dirty = true
   state.global_device_names_dirty = true
   cache.save_global_device_name_cache()
@@ -351,42 +267,6 @@ local on_song_devices_changed = function()
   add_rows_for_new_known_devices()
 end
 
--- A plugin's parameter list can change when its preset/program changes (some
--- plugins expose a different set of parameters per preset). When that happens
--- we drop the cached list so it is recomputed the next time it is needed.
-function on_device_preset_changed(device)
-  local name = device.name
-  if state.cached_parameters[name] then
-    print('Oversample: preset changed for "' .. name .. '", invalidating cache.')
-    state.cached_parameters[name] = nil
-    state.cache_dirty = true
-    state.global_cache_dirty = true
-  end
-end
-
--- Watch every track's device list (and the track list itself) so that adding
--- or removing a plugin invalidates the cache for the affected device types.
-local function attach_song_device_notifiers()
-  local song = renoise.song()
-
-  local function attach_track(track)
-    pcall(function()
-      track.devices_observable:remove_notifier(on_song_devices_changed)
-    end)
-    track.devices_observable:add_notifier(on_song_devices_changed)
-  end
-
-  for t = 1, list_count(song.tracks) do
-    attach_track(song:track(t))
-  end
-
-  song.tracks_observable:add_notifier(function()
-    for t = 1, list_count(song.tracks) do
-      attach_track(song:track(t))
-    end
-    on_song_devices_changed()
-  end)
-end
 
 -- Reset all per-song state when a new song is loaded, then reload the cache.
 function oversample_on_new_song()
@@ -396,7 +276,7 @@ function oversample_on_new_song()
   state.devices_valid = false
 
   cache.load_tool_cache()
-  attach_song_device_notifiers()
+  devices.attach_song_device_notifiers()
 end
 
 -- Called once from main.lua when the tool is loaded.
@@ -413,7 +293,7 @@ function oversample_init()
   -- them (and the per-song cache load) until a song is available.
   local function init_song_dependencies()
     cache.load_tool_cache()
-    attach_song_device_notifiers()
+    devices.attach_song_device_notifiers()
   end
 
   if renoise.song() then
@@ -534,7 +414,7 @@ function oversample()
         return
     end
 
-    local live_names = collect_device_names()
+    local live_names = devices.collect_device_names()
     if #state.cached_device_names > 0 and same_name_set(state.cached_device_names, live_names) then
         -- Reconciled with the live song: show the cached device list now and
         -- resolve the (cheap) live instances lazily when the user interacts.
@@ -556,7 +436,7 @@ function oversample()
     state.selected_devices = {}
     state.settings_row_count = 0
 
-    local slicer = ProcessSlicer(enumerate_tracks, add_device_items_init)
+    local slicer = ProcessSlicer(devices.enumerate_tracks, add_device_items_init)
     slicer:start()
 end
 
@@ -654,7 +534,7 @@ function create_settings_row()
                 end
                 local device_popup = vb.views[device_popup_id]
                 local device_name = device_popup.items[device_popup.value]
-                local device_instances = ensure_device_instances(device_name)
+                local device_instances = devices.ensure_device_instances(device_name)
                 if not device_instances[1] then
                     return
                 end
@@ -727,7 +607,7 @@ function create_settings_row()
                     end
                     local device_popup = vb.views[device_popup_id]
                     local device_name = device_popup.items[device_popup.value]
-                    local device_instances = ensure_device_instances(device_name)
+                    local device_instances = devices.ensure_device_instances(device_name)
                     if not device_instances[1] then
                         return
                     end
@@ -1210,7 +1090,7 @@ local function update_secondary_osig(row_number, device_name)
         return
     end
 
-    local sec_index = match_parameter(parameter_names(sibling), sec_name)
+    local sec_index = match_parameter(devices.parameter_names(sibling), sec_name)
     if not sec_index then
         hide_secondary()
         return
@@ -1305,7 +1185,7 @@ function update_secondary(row_number, device_name, device_instances)
         return
     end
 
-    local sec_index = match_parameter(parameter_names(device), sec_name)
+    local sec_index = match_parameter(devices.parameter_names(device), sec_name)
     if not sec_index then
         hide_secondary()
         return
@@ -1472,7 +1352,7 @@ end
 -- yields) and read its current value directly. This lets the "Oversample"
 -- parameter's slider react instantly, before the full list is enumerated.
 local function apply_parameter_value(row_number, device_name, parameter_name)
-    local device_instances = ensure_device_instances(device_name)
+    local device_instances = devices.ensure_device_instances(device_name)
     local device = device_instances[1]
     if not device then
         return
@@ -1510,13 +1390,13 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
         local sibling, sibling_index
         local primary_name = known_primary(device_name)
         if primary_name then
-            sibling, sibling_index = resolve_sibling_parameter(device_name, primary_name)
+            sibling, sibling_index = devices.resolve_sibling_parameter(device_name, primary_name)
         end
         show_osig_dropdown(row_number, device_name, device_instances, choices, parameter_name, sibling, sibling_index)
         return
     end
 
-    local parameter_index = match_parameter(parameter_names(device), parameter_name)
+    local parameter_index = match_parameter(devices.parameter_names(device), parameter_name)
     if parameter_index then
         state.selected_devices[row_number].parameter_name = device:parameter(parameter_index).name
         state.selected_devices[row_number].parameter_index = parameter_index
@@ -1545,7 +1425,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
     -- must exist for this device and it must be a VST3 build. Without a signature
     -- (or for an AU/VST2 build, which apply_osig_to_device_name refuses to touch)
     -- Set cannot apply the selected target, so don't present osig controls.
-    local sibling, sindex = resolve_sibling_parameter(device_name, parameter_name)
+    local sibling, sindex = devices.resolve_sibling_parameter(device_name, parameter_name)
     if sibling and sindex and device_name:sub(1, 5) == "VST3:"
         and entries and #entries > 0 then
         show_osig_dropdown(row_number, device_name, device_instances,
@@ -1660,7 +1540,7 @@ function device_selected(device_index, device_name, parameter_popup_id, row_numb
     end
 
     mark_parameter_scan_started()
-    local slicer = ProcessSlicer(enumerate_parameters, function(return_value)
+    local slicer = ProcessSlicer(devices.enumerate_parameters, function(return_value)
         apply_parameters(return_value[1])
     end, device_name)
 
@@ -1670,7 +1550,7 @@ end
 
 -- Set the value slider's range/current value from a resolved parameter index.
 function parameter_selected(parameter_index, parameter_name, device_name, row_number)
-    local device_instances = ensure_device_instances(device_name)
+    local device_instances = devices.ensure_device_instances(device_name)
     state.selected_devices[row_number].parameter_name = parameter_name
     state.selected_devices[row_number].parameter_index = parameter_index
 
@@ -1683,206 +1563,6 @@ function parameter_value_changed(parameter_value, _parameter_name, _device_name,
     state.selected_devices[row_number].parameter_value = parameter_value
 end
 
-function enumerate_tracks()
-    local ok, err = xpcall(function()
-        -- print('enumerate_tracks')
-        local song = renoise.song()
-
-        -- Count the total number of active devices up front so the scan can show
-        -- "Scanning devices… (k/total)" progress instead of flickering names.
-        state.device_scan_total = 0
-        state.device_scan_count = 0
-        for t = 1, list_count(song.tracks) do
-            local track = song:track(t)
-            for d = 1, list_count(track.devices) do
-                if track:device(d).is_active then
-                    state.device_scan_total = state.device_scan_total + 1
-                end
-            end
-        end
-
-        for t = 1, list_count(song.tracks) do
-            set_main_buttons_active(false)
-
-            if state.dialog and not state.dialog.visible then
-                print('Dialog closed, stopping.')
-                return
-            end
-
-            local track = song:track(t)
-
-            -- print(track.name)
-
-            -- print('enumerate_tracks:ProcessSlicer:init')
-            local slicer = ProcessSlicer(enumerate_devices, nil, track)
-
-            -- print('enumerate_tracks:ProcessSlicer:start')
-            slicer:start()
-
-            coroutine.yield()
-        end
-
-        set_main_buttons_active(true)
-    end, debug.traceback)
-    if not ok then
-        print("OVERSAMPLE enumerate_tracks ERROR:\n" .. tostring(err))
-    end
-end
-
-function enumerate_devices(track)
-    local ok, err = xpcall(function()
-        set_main_buttons_active(false)
-
-        for d = 1, list_count(track.devices) do
-            if state.dialog and not state.dialog.visible then
-                print('Dialog closed, stopping.')
-                return
-            end
-
-            local device = track:device(d)
-
-            if device.is_active then
-                state.device_scan_count = state.device_scan_count + 1
-                vb.views.status.text = string.format(
-                    'Scanning devices... (%d/%d)', state.device_scan_count, state.device_scan_total)
-
-                if not state.devices[device.name] then
-                    -- print('Resetting device "' .. device.name .. '".')
-                    state.devices[device.name] = {}
-                end
-
-                if not state.devices[device.name].instances then
-                    -- print('Resetting device instances for "' .. device.name .. '".')
-                    state.devices[device.name].instances = {}
-                end
-
-                table.insert(state.devices[device.name].instances, device)
-
-                -- Invalidate the cache if this plugin's preset (and thus possibly
-                -- its parameter list) changes while the song is open.
-                pcall(function()
-                  device.active_preset_observable:remove_notifier(on_device_preset_changed)
-                  device.active_preset_observable:add_notifier(function()
-                    on_device_preset_changed(device)
-                  end)
-                end)
-            end
-
-            coroutine.yield()
-        end
-    end, debug.traceback)
-    if not ok then
-        print("OVERSAMPLE enumerate_devices ERROR:\n" .. tostring(err))
-    end
-end
-
-function get_parameters(device_name)
-    local cached = state.cached_parameters[device_name]
-    if cached then
-        -- Reject a stale cache: empty, placeholder-only, or — most importantly —
-        -- shorter than the plugin's current parameter count (a truncated list
-        -- left behind by an interrupted scan, or by an under-reported #count on
-        -- VST3 plugins). A full cache matches the live count exactly.
-        local instances = ensure_device_instances(device_name)
-        local device = instances[1]
-        if device and #cached == count_parameters(device)
-            and #cached > 0 and type(cached[1]) == "string"
-            and not cached[1]:match("^%(parameter %d+%)$") then
-            return cached
-        end
-        state.cached_parameters[device_name] = nil
-    end
-
-    local instances = ensure_device_instances(device_name)
-    local device = instances[1]
-    if not device then
-        -- Cannot reach into the plugin (e.g. scanned concurrently): bail out.
-        return {}
-    end
-
-    -- Enumerate by probing device:parameter(p), instead of trusting
-    -- #device.parameters (the length operator under-reports the count for some
-    -- VST3 plugins). When device:parameter(p) raises (e.g. "invalid parameter
-    -- index") we have reached the end of the plugin's exposed parameter list:
-    -- stop. We must NOT fabricate placeholder entries for the thrown indices,
-    -- because selecting one would crash and a gap would truncate ipairs().
-    local parameters = {}
-    local got_real = false
-    local p = 1
-    while p <= 4096 do
-        local ok, parameter = pcall(function()
-            return device:parameter(p)
-        end)
-        if not ok or not parameter then
-            break
-        end
-
-        local name = parameter.name
-        if name and name ~= "" then
-            parameters[p] = name
-            got_real = true
-        else
-            parameters[p] = ("(parameter %d)"):format(p)
-        end
-
-        p = p + 1
-        -- Yield every few parameters so Renoise stays responsive during the
-        -- (one-time) scan of plugins with very large parameter counts.
-        if p % 8 == 0 then
-            coroutine.yield()
-        end
-    end
-
-    -- Cache the result so we never iterate this plugin's parameters again
-    -- (until the device type is removed/re-added or its preset changes). The
-    -- cache is kept both per-song (tool_data) and machine-wide (preferences),
-    -- so the installed plugin is only ever reached into once. Only cache a
-    -- non-empty enumeration; a partial or empty pass is retried the next time
-    -- it is needed.
-    if got_real then
-        state.cached_parameters[device_name] = parameters
-        state.cache_dirty = true
-        state.global_cache_dirty = true
-    end
-
-    return parameters
-end
-
--- Count the parameters a device actually exposes by probing device:parameter(p)
--- until it raises (the true end of the list). Used to validate cached lists,
--- since the length operator ('#') can under-report the count for some VST3
--- plugins. Declared local (forward-declared above) because get_parameters,
--- apply_parameter_value and enumerate_parameters call it.
-function count_parameters(device)
-    local n = 0
-    local p = 1
-    while p <= 4096 do
-        local ok = pcall(function()
-            return device:parameter(p)
-        end)
-        if not ok then
-            break
-        end
-        n = n + 1
-        p = p + 1
-    end
-    return n
-end
-
-function enumerate_parameters(device_name)
-    -- print('enumerate_parameters')
-    if state.dialog and state.dialog.visible and vb.views.set_values_button then
-        set_main_buttons_active(false)
-    end
-
-    local parameters = get_parameters(device_name)
-
-    if state.dialog and state.dialog.visible and vb.views.set_values_button then
-        set_main_buttons_active(true)
-    end
-
-    return parameters
-end
 
 -- Preview the minimum ("min") or maximum ("max") value of every relevant
 -- parameter in the grid by moving the UI controls only. Nothing is written to the
@@ -1902,7 +1582,7 @@ function extreme_values(extreme)
     for row_number, selected_device in ipairs(state.selected_devices) do
         local device_name = selected_device.device_name
         if device_name then
-            local device_instances = ensure_device_instances(device_name)
+            local device_instances = devices.ensure_device_instances(device_name)
             if #device_instances > 0 then
                 -- For VST3 plugins whose oversampling is not a host parameter, set
                 -- the intended dropdown label (first = minimum, last = maximum) so
@@ -2135,7 +1815,7 @@ local function apply_osig_to_device_name(device_name, target, save_state)
   -- the next one in the device's natural oversampling order (cyclic). This keeps a
   -- single toggle button useful even though oversampling is now multi-valued.
   if target == "toggle" then
-    local dev0 = ensure_device_instances(device_name)[1]
+    local dev0 = devices.ensure_device_instances(device_name)[1]
     local cur = nil
     if dev0 then
       local ok, blob = pcall(function() return dev0.active_preset_data end)
@@ -2161,7 +1841,7 @@ local function apply_osig_to_device_name(device_name, target, save_state)
       target = ordered[1]
     end
   end
-  local instances = ensure_device_instances(device_name)
+  local instances = devices.ensure_device_instances(device_name)
   local changed = 0
   for _, dev in ipairs(instances) do
     local ok, xml = pcall(function() return dev.active_preset_data end)
@@ -2211,7 +1891,7 @@ function set_values()
         local device_name = selected_device.device_name
         local parameter_name = selected_device.parameter_name
         local parameter_value = selected_device.parameter_value
-        local device_instances = ensure_device_instances(device_name)
+        local device_instances = devices.ensure_device_instances(device_name)
 
         if parameter_value == nil then
             parameter_value = 0
@@ -2226,14 +1906,14 @@ function set_values()
             parameters_changed = parameters_changed + apply_osig_to_device_name(device_name, target, osig_save_state)
         elseif param_index ~= nil then
             for _, device in ipairs(device_instances) do
-                local count = count_parameters(device)
+                local count = devices.count_parameters(device)
                 local parameter_index = selected_device.parameter_index
 
                 -- Resolve by name when known: robust to index drift and to the
                 -- "known parameter shown first" fast path, where the index is only
                 -- valid within the short known-only list.
                 if parameter_name then
-                    for p = 1, count_parameters(device) do
+                    for p = 1, devices.count_parameters(device) do
                         if device:parameter(p).name == parameter_name then
                             parameter_index = p
                             break
@@ -2255,7 +1935,7 @@ function set_values()
                 if sec_index and sec_value ~= nil then
                     local sidx = sec_index
                     if sec_name then
-                        for p = 1, count_parameters(device) do
+                        for p = 1, devices.count_parameters(device) do
                             if device:parameter(p).name == sec_name then
                                 sidx = p
                                 break

@@ -293,7 +293,7 @@ function TestDialogLayout:test_osig_set_patches_vst3_binary_chunk()
    -- (no host parameter). The learned bytes must be written into active_preset_data.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
    local osig = state_of(apply).osig
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -312,7 +312,7 @@ function TestDialogLayout:test_osig_set_patches_vst3_xml_chunk()
    -- the Set path must decode, patch, and re-encode the binary, not corrupt the XML.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
    local osig = state_of(apply).osig
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -333,7 +333,7 @@ function TestDialogLayout:test_osig_set_without_target_toggles_to_next_label()
    -- ("Off") and step to the next label in sorted order ("2x").
    local apply = upvalue(set_values, "apply_osig_to_device_name")
    local osig = state_of(apply).osig
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
    local two = string.char(0, 1, 9, 3, 9)
@@ -349,7 +349,7 @@ end
 
 function TestDialogLayout:test_osig_set_skips_non_vst3_device()
    -- The chunk-signature path is VST3-only; a VST2 build must be left untouched.
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local off = string.char(0, 1, 2, 3, 4)
    local device_name = "VST: FabFilter: Pro-C 2"
    local device = { active_preset_data = off }
@@ -386,7 +386,7 @@ function TestDialogLayout:test_osig_set_toggle_uses_natural_order()
    -- Off -> 16x (wrong); the natural order must step Off -> 2x.
    local apply = upvalue(set_values, "apply_osig_to_device_name")
    local osig = state_of(apply).osig
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local norm = "FabFilter: Pro-L 2"
    local blobs, labels = {}, { "Off", "2x", "4x", "8x", "16x", "32x" }
    for i = 1, #labels do blobs[i] = string.char(0, i, 0, 0, 0) end
@@ -406,7 +406,7 @@ function TestDialogLayout:test_apply_parameter_value_clears_stale_multi_axis_sta
    -- treated as combined "axis1 / axis2" keys.
    local app = upvalue(device_selected, "apply_parameter_value")
    local osig = state_of(app).osig
-   local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+   local devices = self.state.devices
    local sig = { { pos = 1, values = { ["Off"] = 0, ["2x"] = 1 } } }
    osig["FabFilter: Saturn 2"] = sig
    osig["FabFilter: Pro-Q 3"] = sig
@@ -454,7 +454,7 @@ function TestDialogLayout:test_apply_osig_to_device_name_is_fail_closed_on_unrec
     -- chunk untouched (fail closed) rather than overwriting it with a guessed patch.
     local apply = upvalue(set_values, "apply_osig_to_device_name")
     local osig = state_of(apply).osig
-    local devices = state_of(upvalue(set_values, "ensure_device_instances")).devices
+    local devices = self.state.devices
     local norm = "FabFilter: Pro-C 2"
     local off = string.char(0, 1, 2, 3, 4)
     local two = string.char(0, 1, 9, 3, 9)
@@ -543,7 +543,7 @@ function TestDialogLayout:test_only_newest_row_has_add_button()
 end
 
 function TestDialogLayout:test_collect_device_names_dedupes_and_skips_inactive()
-    local collect = upvalue(oversample, "collect_device_names")
+    local collect = upvalue(oversample, "devices").collect_device_names
     local function make_track(devices)
         return {
             devices = devices,
