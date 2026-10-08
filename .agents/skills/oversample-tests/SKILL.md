@@ -1,6 +1,6 @@
 ---
 name: oversample-tests
-description: How to run and verify the Oversample Lua test suites (core + UI) on Lua 5.1/LuaJIT, the accepted passing baseline, Lua 5.1 NUL-split caveats, and the Renoise visual-check steps. Load before running tests or reporting test results.
+description: How to run and verify the Oversample Lua test suites (core + UI + strict-globals load) on Lua 5.1/LuaJIT, the accepted passing baseline, Lua 5.1 NUL-split caveats, and the Renoise visual-check steps. Load before running tests or reporting test results.
 license: MIT
 compatibility: opencode
 ---
@@ -15,13 +15,15 @@ dependencies:
 eval "$(luarocks path)"
 lua test/oversample_core_test.lua
 lua test/oversample_ui_test.lua
+lua test/oversample_load_test.lua
 luajit test/oversample_core_test.lua
 luajit test/oversample_ui_test.lua
+luajit test/oversample_load_test.lua
 ```
 
 ## Lua version caveats
-- CI runs both suites on Lua 5.1 and LuaJIT. Local `lua` may be newer, so do
-  not treat its success alone as Renoise compatibility.
+- CI runs all three suites on Lua 5.1 and LuaJIT. Local `lua` may be newer, so
+  do not treat its success alone as Renoise compatibility.
 - Use `[^%z]+`, not a literal NUL inside a pattern character class, when
   splitting NUL-delimited fields on Lua 5.1/LuaJIT.
 
@@ -34,19 +36,23 @@ luajit test/oversample_ui_test.lua
   ViewBuilder stub. It covers footer/status sizing, hidden secondary fields,
   Saturn's independent axis, transient control overlap, and newest-row `+`
   placement. Keep these tests outside the core coverage run.
+- `test/oversample_load_test.lua` `require`s the entry module under a strict
+  globals sandbox that raises on undeclared global reads *and* writes, and
+  checks that no implementation leaks into globals. Run it in its own process
+  (it temporarily installs a metatable on `_G`).
 
 ## Verification before reporting done
 - Stub tests do **not** verify native rendering, font metrics, clipping, or
   notifier timing. Check in Renoise after reload, including long status
   messages, Minimize/Maximize, switching devices, and adding rows. Report
   visual verification as pending unless actually performed.
-- Accepted baseline: 66 core tests and 6 UI tests passed on Lua 5.5 and LuaJIT;
-  the earlier nine stale core-test errors are no longer an accepted baseline.
+- Accepted baseline: the core, UI, and strict-globals load suites pass on Lua
+  5.5/Lua 5.1 and LuaJIT (the load suite has 3 tests); the earlier nine stale
+  core-test errors are no longer an accepted baseline.
 - Run test lint, Lua syntax checks, and `git diff --check` before reporting
   completion.
 
 ## Lua syntax check (also a commit gate)
 ```sh
-/usr/local/bin/luac -p Oversample/oversample_core.lua && \
-/usr/local/bin/luac -p Oversample/Oversample.lua
+/usr/local/bin/luac -p Oversample/*.lua
 ```
