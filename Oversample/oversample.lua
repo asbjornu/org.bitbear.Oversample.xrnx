@@ -780,21 +780,10 @@ function add_rows_for_new_known_devices()
     end
 end
 
--- Set the value slider's range/current value from a resolved parameter index.
--- A parameter is treated as an enum (dropdown) when it exposes a small set of
--- named, distinct values. Some plugins report the steps with value_quantum == 1
--- (the easy case); others expose enums over a normalised range whose
--- value_quantum is fractional, in which case we check whether the endpoint
--- values map to real (non-numeric) names like "Zero Latency" / "Linear Phase".
--- A parameter is an enum when it exposes a small number of discrete, named
--- values. We detect this without mutating the plugin: a finite step count
--- (value_quantum-based) AND a non-numeric label for the current value.
--- A parameter is treated as an enum (dropdown) when it exposes a small number
--- of distinct, named values. Renoise does not expose enum labels directly, and
--- some enums report value_quantum == 0 (so the step count is unavailable), so
--- we enumerate the distinct labels by stepping the value and reading back the
--- snapped true value. A parameter with 2..64 distinct labels is an enum; one
--- with more (a continuous parameter) is a slider. The result is cached.
+-- Classify a parameter as an enum (dropdown) or a continuous slider. Renoise
+-- exposes no enum labels and some enums report value_quantum == 0, so we probe a
+-- range and count the distinct snapped values: 2..64 distinct, non-empty labels
+-- is an enum, otherwise a slider. The result is cached by (name, range, quantum).
 local function parameter_choices(parameter)
     local min_v = parameter.value_min
     local max_v = parameter.value_max
@@ -1128,8 +1117,6 @@ function update_secondary(row_number, device_name, device_instances)
     state.selected_devices[row_number].secondary_parameter_choices = sec_choices
 end
 
--- Populate the value control (dropdown for enums, slider otherwise) for the
--- chosen parameter, and refresh any dependent secondary control.
 -- Populate the value control (dropdown for enums, slider otherwise) for the
 -- chosen parameter using an explicit target value, and refresh any dependent
 -- secondary control. Used both when reflecting a live device value and when
