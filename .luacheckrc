@@ -36,7 +36,6 @@ files = {
       "TestKnownDevicesParameters",
       "TestKnownPrimarySecondary",
       "TestNearestChoiceIndex",
-      "TestResolveTargetIndices",
       "TestChunkPatch",
       "TestNormalizeDeviceName",
       "TestBase64",

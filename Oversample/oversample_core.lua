@@ -428,54 +428,6 @@ function core.nearest_choice_index(choices, value)
 end
 
 
---------------------------------------------------------------------------------
--- Resolve the exact parameter indices to drive for a given device row, so that
--- "set to min/max" touches ONLY the known oversampling parameter(s) plus the
--- row's selected primary/secondary parameter, and never every parameter.
---
--- `parameter_names` is the device's full list of parameter name strings
--- (1-based, parallel to the device's parameter indices). `device_name` selects
--- the known primary/secondary from known_devices_parameters, and `selected` is
--- the row's selection table with optional `parameter_name`/`parameter_index`
--- and `secondary_parameter_name`/`secondary_parameter_index`. Returns an array
--- of 1-based indices with no duplicates.
-
-function core.resolve_target_indices(parameter_names, device_name, selected)
-   local targets = {}
-   local seen = {}
-   local count = #parameter_names
-
-   local function add(idx)
-      if idx and idx >= 1 and idx <= count and not seen[idx] then
-         seen[idx] = true
-         targets[#targets + 1] = idx
-      end
-   end
-
-   local function add_by_name(name)
-      if name then
-         local i = core.match_parameter(parameter_names, name)
-         if i then add(i) end
-      end
-   end
-
-   add_by_name(core.known_primary(device_name))
-   add_by_name(core.known_secondary(device_name))
-
-   if selected and selected.parameter_name then
-      add_by_name(selected.parameter_name)
-   else
-      add(selected and selected.parameter_index)
-   end
-
-   if selected and selected.secondary_parameter_name then
-      add_by_name(selected.secondary_parameter_name)
-   else
-      add(selected and selected.secondary_parameter_index)
-   end
-
-   return targets
-end
 
 
 --------------------------------------------------------------------------------
@@ -725,13 +677,6 @@ function core.detect_label_xml(xml, entries)
    return core.detect_label(bin, entries)
 end
 
--- The first label found in `entries`, used as a sensible default target.
-function core.first_label(entries)
-   if not entries or #entries == 0 then
-      return nil
-   end
-   return next(entries[1].values) or nil
-end
 
 -- Serialize a multi-state entries table into a single printable string. Each
 -- entry becomes one length-prefixed field holding "pos\0label\0byte\0label\0byte…".
