@@ -1723,42 +1723,26 @@ function set_values()
                 + osig.apply_osig_to_device_name(device_name, target, osig_save_state)
         elseif param_index ~= nil then
             for _, device in ipairs(device_instances) do
-                local count = devices.count_parameters(device)
-                local parameter_index = selected_device.parameter_index
-
                 -- Resolve by name when known: robust to index drift and to the
                 -- "known parameter shown first" fast path, where the index is only
                 -- valid within the short known-only list.
-                if parameter_name then
-                    for p = 1, devices.count_parameters(device) do
-                        if device:parameter(p).name == parameter_name then
-                            parameter_index = p
-                            break
-                        end
-                    end
-                end
+                local parameter_names = devices.parameter_names(device)
+                local count = #parameter_names
+                local parameter_index = core.resolve_parameter_index(
+                    parameter_names, parameter_name, selected_device.parameter_index)
 
                 if parameter_index and parameter_index >= 1 and parameter_index <= count then
-                    local parameter = device:parameter(parameter_index)
-                    parameter:record_value(parameter_value)
+                    device:parameter(parameter_index):record_value(parameter_value)
                     parameters_changed = parameters_changed + 1
                 end
 
                 -- Apply the dependent secondary parameter (e.g. Pro-Q's
                 -- "Processing Resolution"), resolved by name for robustness.
-                local sec_index = selected_device.secondary_parameter_index
                 local sec_value = selected_device.secondary_parameter_value
-                local sec_name = selected_device.secondary_parameter_name
-                if sec_index and sec_value ~= nil then
-                    local sidx = sec_index
-                    if sec_name then
-                        for p = 1, devices.count_parameters(device) do
-                            if device:parameter(p).name == sec_name then
-                                sidx = p
-                                break
-                            end
-                        end
-                    end
+                if selected_device.secondary_parameter_index and sec_value ~= nil then
+                    local sidx = core.resolve_parameter_index(
+                        parameter_names, selected_device.secondary_parameter_name,
+                        selected_device.secondary_parameter_index)
                     if sidx and sidx >= 1 and sidx <= count then
                         device:parameter(sidx):record_value(sec_value)
                         parameters_changed = parameters_changed + 1
