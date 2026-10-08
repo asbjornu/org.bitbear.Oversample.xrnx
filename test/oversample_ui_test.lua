@@ -8,24 +8,8 @@ local renoise_stub = require("test/support/renoise_stub")
 
 -- The tool module's functions, refreshed by each setUp via dofile.
 local oversample, destroy, create_settings_row, update_secondary
-local parameter_selected, device_selected, set_values
+local parameter_selected, set_values
 local refresh_device_popups, add_device_items, set_main_buttons_active
-
-local function upvalue(fn, wanted)
-    local i = 1
-    while true do
-        local name, value = debug.getupvalue(fn, i)
-        if not name then error("Missing upvalue: " .. wanted) end
-        if name == wanted then return value end
-        i = i + 1
-    end
-end
-
--- The mutable runtime state is owned by Oversample/state.lua and injected into
--- every module, so white-box tests reach it through the `state` upvalue.
-local function state_of(fn)
-    return upvalue(fn, "state")
-end
 
 TestDialogLayout = {}
 
@@ -48,7 +32,6 @@ function TestDialogLayout:setUp()
     create_settings_row = module.create_settings_row
     update_secondary = module.update_secondary
     parameter_selected = module.parameter_selected
-    device_selected = module.device_selected
     set_values = module.set_values
     refresh_device_popups = module.refresh_device_popups
     add_device_items = module.add_device_items
@@ -64,7 +47,8 @@ function TestDialogLayout:setUp()
     self.secondary_label = self.views[self.ids.parameter_value_secondary_label_id]
     self.root = host.root
     self.footer = self.root.views[1].views[4]
-    self.state = state_of(update_secondary)
+    self.internals = module._internals
+    self.state = module._internals.state
     self.selected = self.state.selected_devices
     -- Build the cache module against the same injected state the coordinator uses.
     self.cache = cache_factory({ renoise = renoise, core = core, state = self.state })
@@ -169,8 +153,8 @@ function TestDialogLayout:test_primary_switches_never_temporarily_expand_row()
         lu.assertFalse(self.popup.visible and self.slider.visible, "Transient control overlap")
         lu.assertTrue(self.row.width <= width, "Transient row expansion")
     end
-    local apply = upvalue(upvalue(parameter_selected, "set_value_control"), "apply_value_to_control")
-    local cache = state_of(upvalue(apply, "parameter_choices")).parameter_choices_cache
+    local apply = self.internals.apply_value_to_control
+    local cache = self.state.parameter_choices_cache
     local parameter = {name = "Oversampling", value_min = 0, value_max = 1,
         value_quantum = 0, value = 0}
     local device = {parameter = function() return parameter end}
@@ -183,7 +167,7 @@ function TestDialogLayout:test_primary_switches_never_temporarily_expand_row()
         lu.assertEquals(self.slider.visible, #choices == 0)
         lu.assertEquals(self.row.width, width)
     end
-    local show_osig = upvalue(upvalue(device_selected, "apply_parameter_value"), "show_osig_dropdown")
+    local show_osig = self.internals.show_osig_dropdown
     show_osig(1, "VST3: FabFilter: Pro-C 2", {{}}, {{value = 1, label = "Off"}}, "Oversampling")
     lu.assertTrue(self.popup.visible)
     lu.assertFalse(self.slider.visible)
@@ -203,7 +187,7 @@ function TestDialogLayout:test_blank_value_strings_are_not_enum_choices()
     -- A parameter with distinct snapped values but no display text (empty or
     -- whitespace-only value_string) is not an enum; it must not produce a popup
     -- full of blank entries.
-    local choices_for = upvalue(upvalue(update_secondary, "update_secondary_osig"), "parameter_choices")
+    local choices_for = self.internals.parameter_choices
     local function probe(name, display)
         local p = setmetatable({ name = name, value_min = 0, value_max = 3, value_quantum = 1 }, {
             __newindex = function(t, k, v) rawset(t, k, v) end,
@@ -221,8 +205,7 @@ end
 function TestDialogLayout:test_osig_set_patches_vst3_binary_chunk()
    -- Drive the "Set" path for a VST3 device whose oversampling is chunk-driven
    -- (no host parameter). The learned bytes must be written into active_preset_data.
-   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
-   local osig = state_of(apply).osig
+   local osig = self.state.osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
@@ -240,8 +223,7 @@ end
 function TestDialogLayout:test_osig_set_patches_vst3_xml_chunk()
    -- VST3 hosts wrap the chunk in base64 inside <ParameterChunk><![CDATA[…]]></ParameterChunk>;
    -- the Set path must decode, patch, and re-encode the binary, not corrupt the XML.
-   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
-   local osig = state_of(apply).osig
+   local osig = self.state.osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
@@ -261,8 +243,7 @@ end
 function TestDialogLayout:test_osig_set_without_target_toggles_to_next_label()
    -- A row with no explicit target uses the cyclic "toggle": detect current state
    -- ("Off") and step to the next label in sorted order ("2x").
-   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
-   local osig = state_of(apply).osig
+   local osig = self.state.osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-C 2"
    local off = string.char(0, 1, 2, 3, 4)
@@ -293,7 +274,7 @@ end
 function TestDialogLayout:test_osig_target_for_row_combines_secondary_safely()
    -- A combined primary label must have its trailing portion replaced by the dependent
    -- secondary, never appended as a third segment (which would match no signature label).
-   local target_for_row = upvalue(set_values, "osig").osig_target_for_row
+   local target_for_row = self.internals.osig.osig_target_for_row
    self.selected[1] = { osig_driven = true, osig_target_label = "Linear Phase / Medium",
       osig_target_label_sec = "High" }
    lu.assertEquals(target_for_row(1), "Linear Phase / High")
@@ -314,8 +295,7 @@ end
 function TestDialogLayout:test_osig_set_toggle_uses_natural_order()
    -- Pro-L 2 natural order is Off, 2x, 4x, 8x, 16x, 32x. Alphabetical sorting would step
    -- Off -> 16x (wrong); the natural order must step Off -> 2x.
-   local apply = upvalue(set_values, "osig").apply_osig_to_device_name
-   local osig = state_of(apply).osig
+   local osig = self.state.osig
    local devices = self.state.devices
    local norm = "FabFilter: Pro-L 2"
    local blobs, labels = {}, { "Off", "2x", "4x", "8x", "16x", "32x" }
@@ -334,8 +314,8 @@ function TestDialogLayout:test_apply_parameter_value_clears_stale_multi_axis_sta
    -- Switching from a multi-axis device (Saturn 2) to a single-axis one (Pro-Q 3) must
    -- clear the stale osig_multi_axis / osig_axes state, or single-axis labels would be
    -- treated as combined "axis1 / axis2" keys.
-   local app = upvalue(device_selected, "apply_parameter_value")
-   local osig = state_of(app).osig
+   local app = self.internals.apply_parameter_value
+   local osig = self.state.osig
    local devices = self.state.devices
    local sig = { { pos = 1, values = { ["Off"] = 0, ["2x"] = 1 } } }
    osig["FabFilter: Saturn 2"] = sig
@@ -355,7 +335,7 @@ function TestDialogLayout:test_update_secondary_osig_multi_axis_clears_stale_sec
    -- A multi-axis device's secondary popup shows the next axis' labels; any dependent
    -- (sibling) secondary state left by a previous device must be cleared so the combined
    -- target is never corrupted (e.g. "Off / On / Medium").
-   local upd = upvalue(update_secondary, "update_secondary_osig")
+   local upd = self.internals.update_secondary_osig
    local axes = core.osig_axes("FabFilter: Saturn 2")
    self.selected[1] = {
       osig_driven = true,
@@ -382,8 +362,7 @@ function TestDialogLayout:test_update_secondary_osig_multi_axis_clears_stale_sec
 function TestDialogLayout:test_apply_osig_to_device_name_is_fail_closed_on_unrecognized_state()
     -- When the device's current VST3 chunk matches no learned byte, Set must leave the
     -- chunk untouched (fail closed) rather than overwriting it with a guessed patch.
-    local apply = upvalue(set_values, "osig").apply_osig_to_device_name
-    local osig = state_of(apply).osig
+     local osig = self.state.osig
     local devices = self.state.devices
     local norm = "FabFilter: Pro-C 2"
     local off = string.char(0, 1, 2, 3, 4)
@@ -404,7 +383,7 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
     -- "Linear Phase / Maximum"), the resolution implied by the suffix ("Maximum") must seed
     -- osig_target_label_sec, so Minimize/Maximize land on the right resolution instead of
     -- always defaulting to the first choice ("Low").
-    local upd = upvalue(update_secondary, "update_secondary_osig")
+    local upd = self.internals.update_secondary_osig
     local labels = { "Low", "Medium", "High", "Very High", "Maximum" }
     local make_param = function()
         local p = { name = "Processing Resolution", value_min = 0, value_max = 1, value_quantum = 0.25, _v = 0 }
@@ -432,7 +411,7 @@ function TestDialogLayout:test_update_secondary_osig_seeds_secondary_from_combin
     }
     -- parameter_choices caches by (name, range); clear any entry left by an earlier test so
     -- the sibling is actually probed (otherwise a stale 3-choice cache would be reused).
-    local cache = state_of(upvalue(upd, "parameter_choices")).parameter_choices_cache
+    local cache = self.state.parameter_choices_cache
     for k in pairs(cache) do cache[k] = nil end
     upd(1, "VST3: FabFilter: Pro-Q 3", { { active_preset_data = "" } })
     lu.assertEquals(self.selected[1].osig_target_label_sec, "Maximum")
@@ -473,7 +452,7 @@ function TestDialogLayout:test_only_newest_row_has_add_button()
 end
 
 function TestDialogLayout:test_collect_device_names_dedupes_and_skips_inactive()
-    local collect = upvalue(oversample, "devices").collect_device_names
+    local collect = self.internals.devices.collect_device_names
     local function make_track(devices)
         return {
             devices = devices,
@@ -491,6 +470,87 @@ function TestDialogLayout:test_collect_device_names_dedupes_and_skips_inactive()
         return { tracks = tracks, track = function(song, index) return song.tracks[index] end }
     end
     lu.assertEquals(collect(), { "A", "C" })
+end
+
+function TestDialogLayout:test_attach_song_device_notifiers_replaces_previous()
+    -- Attaching for a replacement song must remove the previous track-list
+    -- notifier (matched by identity) and install exactly one for the new song,
+    -- rather than accumulating a notifier on every new song/reopen.
+    local devices = self.internals.devices
+    local function observable()
+        local o = { notifiers = {} }
+        function o.add_notifier(obs, fn) obs.notifiers[#obs.notifiers + 1] = fn end
+        function o.remove_notifier(obs, fn)
+            for i, candidate in ipairs(obs.notifiers) do
+                if candidate == fn then table.remove(obs.notifiers, i); return end
+            end
+        end
+        return o
+    end
+    local function song_with(tracks_observable)
+        return {
+            tracks = { { devices_observable = observable() } },
+            tracks_observable = tracks_observable,
+            track = function(song, index) return song.tracks[index] end,
+        }
+    end
+
+    local first_tracks = observable()
+    renoise.song = function() return song_with(first_tracks) end
+    devices.attach_song_device_notifiers()
+    lu.assertEquals(#first_tracks.notifiers, 1)
+    local first_notifier = first_tracks.notifiers[1]
+
+    local second_tracks = observable()
+    renoise.song = function() return song_with(second_tracks) end
+    devices.attach_song_device_notifiers()
+
+    lu.assertEquals(#first_tracks.notifiers, 0, "stale track-list notifier was not removed")
+    lu.assertEquals(#second_tracks.notifiers, 1, "duplicate track-list notifier installed")
+    lu.assertNotEquals(second_tracks.notifiers[1], first_notifier)
+end
+
+function TestDialogLayout:test_attach_preset_notifier_replaces_previous()
+    -- Re-attaching the preset-change notifier to the same device (as happens on
+    -- a rescan) must remove the exact previously-added closure so only one
+    -- notifier remains, rather than accumulating duplicates.
+    local devices = self.internals.devices
+    local function observable()
+        local o = { notifiers = {} }
+        function o.add_notifier(obs, fn) obs.notifiers[#obs.notifiers + 1] = fn end
+        function o.remove_notifier(obs, fn)
+            for i, candidate in ipairs(obs.notifiers) do
+                if candidate == fn then table.remove(obs.notifiers, i); return end
+            end
+        end
+        return o
+    end
+    local device = {
+        name = "VST3: Test",
+        is_active = true,
+        active_preset_observable = observable(),
+    }
+    renoise.song = function()
+        return {
+            tracks = {
+                { devices = { device }, device = function(track, index) return track.devices[index] end },
+            },
+            track = function(song, index) return song.tracks[index] end,
+        }
+    end
+
+    devices.ensure_device_instances(device.name)
+    lu.assertEquals(#device.active_preset_observable.notifiers, 1)
+    local first_notifier = device.active_preset_observable.notifiers[1]
+
+    -- Drop the cached instances to force a rescan that re-attaches the same device.
+    self.state.devices[device.name].instances = nil
+    devices.ensure_device_instances(device.name)
+
+    lu.assertEquals(#device.active_preset_observable.notifiers, 1,
+        "duplicate preset notifier installed")
+    lu.assertNotEquals(device.active_preset_observable.notifiers[1], first_notifier,
+        "stale preset notifier was not removed")
 end
 
 function TestDialogLayout:test_merge_cache_list_rebuilds_parameter_mirror()
@@ -513,7 +573,7 @@ function TestDialogLayout:test_merge_name_list_dedupes_preserving_order()
 end
 
 function TestDialogLayout:test_refresh_device_popups_sorts_and_preserves_selection()
-    local names = state_of(refresh_device_popups).cached_device_names
+    local names = self.state.cached_device_names
     for i = #names, 1, -1 do names[i] = nil end
     names[1], names[2], names[3] = "C", "A", "B"
     local popup = self.views[self.ids.device_popup_id]
@@ -526,7 +586,7 @@ function TestDialogLayout:test_refresh_device_popups_sorts_and_preserves_selecti
 end
 
 function TestDialogLayout:test_add_device_items_sorts_and_selects_index()
-    local names = state_of(add_device_items).cached_device_names
+    local names = self.state.cached_device_names
     for i = #names, 1, -1 do names[i] = nil end
     names[1], names[2], names[3] = "C", "A", "B"
     local popup = self.views[self.ids.device_popup_id]

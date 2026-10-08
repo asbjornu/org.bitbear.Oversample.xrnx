@@ -1775,4 +1775,18 @@ Oversample.add_device_items = add_device_items
 Oversample.set_main_buttons_active = set_main_buttons_active
 Oversample.set_values = set_values
 
+-- Internal seams the UI tests drive directly. Grouped under `_internals` so the
+-- public/white-box API above stays uncluttered and the tests do not have to walk
+-- the module's upvalue graph.
+Oversample._internals = {
+    state = state,
+    devices = devices,
+    osig = osig,
+    parameter_choices = parameter_choices,
+    apply_value_to_control = apply_value_to_control,
+    show_osig_dropdown = show_osig_dropdown,
+    apply_parameter_value = apply_parameter_value,
+    update_secondary_osig = update_secondary_osig,
+}
+
 return Oversample
