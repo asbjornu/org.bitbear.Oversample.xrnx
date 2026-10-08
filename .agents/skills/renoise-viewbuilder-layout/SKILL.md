@@ -1,13 +1,13 @@
 ---
 name: renoise-viewbuilder-layout
-description: Rules for building or repairing Renoise ViewBuilder dialogs in Oversample.lua — fixed-width aligned columns, width-property constraints, footer/status sizing, and hiding unused secondary controls. Load when editing UI layout or fixing dialog/column/footer/justify issues.
+description: Rules for building or repairing Renoise ViewBuilder dialogs in oversample.lua — fixed-width aligned columns, width-property constraints, footer/status sizing, and hiding unused secondary controls. Load when editing UI layout or fixing dialog/column/footer/justify issues.
 license: MIT
 compatibility: opencode
 ---
 
 # Renoise ViewBuilder layout rules (learned the hard way)
 
-Apply these whenever you touch `Oversample/Oversample.lua` dialog construction
+Apply these whenever you touch `Oversample/oversample.lua` dialog construction
 or `vb:` control sizing.
 
 ## Aligned columns = fixed widths
