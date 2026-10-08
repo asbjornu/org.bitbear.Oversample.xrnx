@@ -40,30 +40,15 @@ local strict_globals = {
       if declared[name] then return rawget(_G, name) end
       error("variable '" .. name .. "' is not declared", 2)
    end,
-   __newindex = function(_, name, value)
-      declared[name] = true
-      rawset(_G, name, value)
+   __newindex = function(_, name)
+      error("undeclared global write '" .. name .. "' at load time", 2)
    end,
 }
 
--- Minimal host stub, sufficient for load time only: state.lua creates the cache
--- document and the entry module creates the ViewBuilder.
-local builder = {}
-setmetatable(builder, { __call = function() return builder end })
-renoise = {
-   ViewBuilder = setmetatable({
-      DEFAULT_DIALOG_MARGIN = 8,
-      DEFAULT_CONTROL_SPACING = 4,
-      DEFAULT_CONTROL_MARGIN = 4,
-      DEFAULT_CONTROL_HEIGHT = 20,
-   }, { __call = function() return builder end }),
-   Document = {
-      create = function() return function(spec) return spec end end,
-      ObservableStringList = function() return {} end,
-   },
-   song = function() return nil end,
-   tool = function() return { preferences = {} } end,
-}
+-- Host stub shared with the UI suite, sufficient for load time: state.lua creates
+-- the cache document and the entry module creates the ViewBuilder.
+local renoise_stub = require("test/support/renoise_stub")
+renoise = renoise_stub({ song = function() return nil end }).renoise
 
 -- Run `fn` with the strict sandbox active, then restore the real environment so
 -- luaunit (which itself falls back to undeclared global lookups) keeps working.

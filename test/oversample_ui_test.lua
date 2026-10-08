@@ -4,6 +4,7 @@ package.path = "./?.lua;" .. package.path
 local lu = require("luaunit")
 local core = require("Oversample/oversample_core")
 local cache_factory = require("Oversample/cache")
+local renoise_stub = require("test/support/renoise_stub")
 
 -- The tool module's functions, refreshed by each setUp via dofile.
 local oversample, destroy, create_settings_row, update_secondary
@@ -29,88 +30,16 @@ end
 TestDialogLayout = {}
 
 function TestDialogLayout:setUp()
-    local test = self
     self.watch = nil
-    self.builder = { views = {} }
-    self.spacing = 4
-    self.control_height = 20
-
-    local function extent(view, axis)
-        local state = view._state
-        local count, sum, maximum = 0, 0, 0
-        for _, child in ipairs(state.views) do
-            if child.visible then
-                local size = extent(child, axis)
-                count, sum, maximum = count + 1, sum + size, math.max(maximum, size)
-            end
-        end
-        local horizontal = state.kind == "row" or state.kind == "horizontal_aligner"
-        local natural = axis == "height" and test.control_height or 0
-        if horizontal or state.kind == "column" then
-            natural = ((axis == "width") == horizontal) and
-                (sum + math.max(count - 1, 0) * (state.spacing or 0)) or maximum
-            natural = natural + 2 * (state.margin or 0)
-        end
-        return math.max(state[axis] or 0, natural)
-    end
-
-    for _, kind in ipairs({"row", "column", "horizontal_aligner", "text",
-        "multiline_text", "popup", "slider", "button", "space"}) do
-        self.builder[kind] = function(_, spec)
-            local state = {kind = kind, views = {}, visible = true}
-            for key, value in pairs(spec) do
-                if type(key) == "number" then state.views[key] = value
-                else state[key] = value end
-            end
-            function state.add_child(rack, child)
-                rack.views[#rack.views + 1] = child
-            end
-            function state.remove_child(rack, child)
-                for i, candidate in ipairs(rack.views) do
-                    if candidate == child then table.remove(rack.views, i); return end
-                end
-                error("Child not found")
-            end
-            local view = setmetatable({_state = state}, {
-                __index = function(object, key)
-                    if key == "width" or key == "height" then return extent(object, key) end
-                    return state[key]
-                end,
-                __newindex = function(_, key, value)
-                    state[key] = value
-                    -- Renoise single-line text grows on assignment, but never shrinks.
-                    if key == "text" and kind == "text" then
-                        state.width = math.max(state.width or 0, #value * test.control_height * 0.3)
-                    end
-                    if test.watch then test.watch() end
-                end
-            })
-            if spec.id then
-                lu.assertIsNil(test.builder.views[spec.id], "Duplicate view ID")
-                test.builder.views[spec.id] = view
-            end
-            return view
-        end
-    end
-
-    renoise = {
-        ViewBuilder = setmetatable({DEFAULT_DIALOG_MARGIN = 8,
-            DEFAULT_CONTROL_SPACING = self.spacing, DEFAULT_CONTROL_MARGIN = 4,
-            DEFAULT_CONTROL_HEIGHT = self.control_height}, {
-            __call = function() return test.builder end
-        }),
-        Document = {
-            create = function() return function(spec) return spec end end,
-            ObservableStringList = function() return {} end
-        },
-        song = function() return {tracks = {}} end,
-        app = function() return {
-            show_custom_dialog = function(_, _, view)
-                test.root = view
-                return {visible = true, close = function() end}
-            end
-        } end
-    }
+    local host = renoise_stub({
+        spacing = 4,
+        control_height = 20,
+        watch = function() if self.watch then self.watch() end end,
+        song = function() return { tracks = {} } end,
+    })
+    self.host = host
+    self.builder = host.builder
+    renoise = host.renoise
     -- Background scans stay pending; each test supplies only the device state it needs.
     ProcessSlicer = function() return {start = function() end} end
     local module = dofile("Oversample/oversample.lua")
@@ -133,6 +62,7 @@ function TestDialogLayout:setUp()
     self.slider = self.views[self.ids.parameter_value_slider_id]
     self.secondary = self.views[self.ids.parameter_value_secondary_popup_id]
     self.secondary_label = self.views[self.ids.parameter_value_secondary_label_id]
+    self.root = host.root
     self.footer = self.root.views[1].views[4]
     self.state = state_of(update_secondary)
     self.selected = self.state.selected_devices
