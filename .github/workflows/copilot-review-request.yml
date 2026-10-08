@@ -61,7 +61,7 @@ jobs:
             --jq '.[] | select(.commit.message | startswith("fixup!")) | (.author.login // "unknown")')
           if [ -n "$fixup_authors" ] && printf '%s\n' "$fixup_authors" | is_all_bot; then
             marker_head=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
-              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.user.login)\t\(.body)"' \
+              --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.user.login)\t\(.body)"' \
               | sort | awk -F'\t' -v who="$token_user" '$2 == who { out = $0 } END { if (out != "") print out }' \
               | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
             status="diverged"

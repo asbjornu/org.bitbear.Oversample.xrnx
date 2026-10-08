@@ -141,7 +141,7 @@ jobs:
             # before the current-review gate so a failed run is still reported
             # when the head moved on and no new Copilot review exists yet.
             prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' |
+              --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' |
               sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
             prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
             prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
@@ -219,8 +219,11 @@ jobs:
             # Keep the machine marker and the human summary on one line: the
             # aw-pr-fix-state body is split by line before the field/line
             # readers in this workflow and in pr-fix-squash.yml parse it, so a
-            # newline before the summary would corrupt marker ID extraction.
-            pending="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=none head=$head --> 🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — dispatching a run for head \`${head:0:7}\`…"
+            # newline would corrupt marker ID extraction. The marker goes after
+            # the summary, not before it: a leading "<!-- ... -->" makes
+            # CommonMark treat the entire line as a raw-HTML block, so the
+            # summary's Markdown would render as literal text instead.
+            pending="🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — dispatching a run for head \`${head:0:7}\`… <!-- aw-pr-fix-state review=$review pr=$pr round=$round run=none head=$head -->"
             if [ -n "$prev_comment" ]; then
               marker_id=$prev_comment
               gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="$pending" >/dev/null
@@ -257,11 +260,12 @@ jobs:
             # Visible heads-up so watchers know the fixer picked up this review.
             # Link via the server URL so this also works on GitHub Enterprise.
             run_url="$SERVER_URL/$REPO/actions/runs/$run_id"
-            outcome="<!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head --> 🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — [run \\#$run_id]($run_url) for head \`${head:0:7}\`."
+            outcome="🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — [run \\#$run_id]($run_url) for head \`${head:0:7}\`. <!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head -->"
             # PATCH (never POST) keeps the marker and this summary in one
             # comment across cycles; a POST would duplicate it. The body stays
-            # single-line so the marker ID readers (here and in
-            # pr-fix-squash.yml) can extract fields without seeing the summary.
+            # single-line (summary first, marker last, as above) so the marker
+            # ID readers (here and in pr-fix-squash.yml) can split it by line
+            # and extract fields.
             # Do not swallow a failed write: if the marker is left at
             # run=none, the next cycle loses the failure report and re-dispatches
             # the same review. Retry, then fall back to a fresh state comment so

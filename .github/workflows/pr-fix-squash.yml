@@ -42,7 +42,7 @@ jobs:
           # Anchor the rewrite to a token-authored dispatch marker whose
           # recorded head is an ancestor of the current head.
           marker=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
-            --jq '.[] | select(.body | startswith("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
+            --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
             | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
           marker_id=$(printf '%s' "$marker" | awk -F'\t' '{ print $2 }')
           marker_head=$(printf '%s' "$marker" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
