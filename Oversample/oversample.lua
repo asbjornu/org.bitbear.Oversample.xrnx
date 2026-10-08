@@ -642,16 +642,7 @@ function add_device_items_init()
     local ok, err = xpcall(function()
         state.devices_valid = true
 
-        local device_items = {}
-        if next(state.devices) ~= nil then
-            for k, _ in pairs(state.devices) do
-                device_items[#device_items + 1] = k
-            end
-        else
-            for _, n in ipairs(state.cached_device_names) do
-                device_items[#device_items + 1] = n
-            end
-        end
+        local device_items = core.collect_device_items(state.devices, state.cached_device_names)
 
         table.sort(device_items)
 
