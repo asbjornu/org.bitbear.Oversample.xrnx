@@ -83,8 +83,8 @@ remains available even when High Quality is Off.
   there is NOT proof of Renoise compatibility. Lua 5.2+ syntax (e.g. `goto` /
   `::label::`) parses on 5.5 and LuaJIT 2.1 but fails on plain Lua 5.1, which CI
   also runs. Pin the push gate on `luajit test/oversample_core_test.lua` (and the
-  UI suite) passing, plus `luac -p` and `luacheck .`. `luajit` is installed
-  locally and is the Lua 5.1-compatible runtime to use.
+  UI and strict-globals load suites) passing, plus `luac -p` and `luacheck .`.
+  `luajit` is installed locally and is the Lua 5.1-compatible runtime to use.
 - Commit every meaningful change, ensuring that each commit represents a
   logical unit of work.
 - When fixing code that was added in a previous commit on the same branch,

@@ -15,7 +15,7 @@ Workflow:
 - Base: `base=$(git merge-base main HEAD)` (== `main` after the rebase).
 - Plan: `git log --oneline $base..HEAD` and `git diff $base...HEAD --stat`; map each commit to a feature or to the drop/fixup buckets.
 - Rewrite: `git rebase -i --autosquash $base` (reorder, `fixup`/`squash`, `reword`, `drop`).
-- Verify every commit: run the suites (`luajit test/oversample_core_test.lua` and `luajit test/oversample_ui_test.lua`; see the `oversample-tests` skill) at each rewritten commit; they must pass at each one, not just the tip.
+- Verify every commit: run the suites (`luajit test/oversample_core_test.lua`, `luajit test/oversample_ui_test.lua`, and `luajit test/oversample_load_test.lua`; see the `oversample-tests` skill) at each rewritten commit; they must pass at each one, not just the tip.
 - Verify the final tree: `git diff <pre-rewrite-backup> HEAD` must be empty, so the branch's resulting diff equals its pre-rewrite state.
 - Commit rules: `git commit -S`, terse header ≤50 chars (repeat in body if truncated), body wrapped at 72.
 - Never rewrite `main` or other shared branches; publish with `git push --force-with-lease`.
