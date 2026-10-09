@@ -63,21 +63,24 @@ jobs:
           anchor_id=$(printf '%s' "$anchor" | awk -F'\t' '{ print $2 }')
           anchor_review=$(printf '%s' "$anchor" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
           anchor_head=$(printf '%s' "$anchor" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
-          # Start each round from the orchestrator's dispatch head; reuse this
-          # workflow's own anchor only within the same round.
-          if [ -z "$anchor_head" ] || [ "$anchor_review" != "$marker_review" ]; then
+          # Pick an anchor that is an ancestor of HEAD. Prefer, in order: this
+          # workflow's own anchor for the same round, then the orchestrator's
+          # dispatch head, then this workflow's anchor from an earlier round.
+          # A concurrent re-dispatch can record a head this run already rewrote,
+          # so the dispatch head is used only when it is still an ancestor.
+          published_anchor="$anchor_head"
+          anchor_head=""
+          if [ -n "$marker_review" ] && [ "$anchor_review" = "$marker_review" ] \
+             && [ -n "$published_anchor" ] \
+             && git merge-base --is-ancestor "$published_anchor" HEAD; then
+            anchor_head="$published_anchor"
+          elif [ -n "$marker_head" ] && git merge-base --is-ancestor "$marker_head" HEAD; then
             anchor_head="$marker_head"
+          elif [ -n "$published_anchor" ] && git merge-base --is-ancestor "$published_anchor" HEAD; then
+            echo "Dispatch head is not an ancestor; keeping the published anchor $published_anchor" >&2
+            anchor_head="$published_anchor"
           fi
-          # Safety net: if the branch was force-pushed by something else, the
-          # same-review anchor may no longer be an ancestor. Fall back to the
-          # dispatch head so the round can still squash. (The anchor is only ever
-          # written after a verified push, so it does not point at an unpublished
-          # SHA.)
-          if [ -n "$anchor_head" ] && ! git merge-base --is-ancestor "$anchor_head" HEAD; then
-            echo "Anchor $anchor_head is not an ancestor; falling back to the dispatch head" >&2
-            anchor_head="$marker_head"
-          fi
-          if [ -z "$anchor_head" ] || ! git merge-base --is-ancestor "$anchor_head" HEAD; then
+          if [ -z "$anchor_head" ]; then
             echo "No active fixer dispatch for this head; nothing to squash"
             exit 0
           fi
@@ -222,8 +225,22 @@ jobs:
           remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" | cut -f1)
           if [ "$remote_head" = "$new_head" ]; then
             echo "Squashed and force-pushed $HEAD_REF"
-            if ! write_anchor "$new_head"; then
-              echo "Could not record the squash anchor at $new_head" >&2
+            # The push already rewrote the range, so a missing anchor is
+            # unrecoverable: retry, then fail visibly and ask for a fresh review
+            # instead of reporting success that strands the next run.
+            anchor_ok=""
+            for _ in 1 2 3; do
+              if write_anchor "$new_head"; then
+                anchor_ok=1
+                break
+              fi
+              sleep 3
+            done
+            if [ -z "$anchor_ok" ]; then
+              echo "Could not record the squash anchor at $new_head; requesting a review" >&2
+              gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+                -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+              exit 1
             fi
           else
             # The push did not land (or the branch moved); leave the anchor at
