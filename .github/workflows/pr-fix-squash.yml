@@ -229,12 +229,11 @@ jobs:
           if git push --force-with-lease origin "HEAD:$HEAD_REF"; then
             echo "Squashed and force-pushed $HEAD_REF"
           else
-            # Restore the previous anchor so a later run can retry. If this
-            # fails, the ancestor fallback above re-anchors from the dispatch
-            # head on the next run.
-            if ! write_anchor "$anchor_head"; then
-              echo "Could not roll the squash anchor back to $anchor_head" >&2
-            fi
-            echo "Squash push failed; leaving the branch untouched"
+            # A nonzero push status does not prove the remote rejected the
+            # update: the connection can drop after the server accepts it. Do
+            # NOT roll the anchor back; leaving new_head lets the ancestor
+            # fallback above cover both outcomes (an unpublished new_head falls
+            # back to the dispatch head; an accepted push is already correct).
+            echo "Squash push reported failure; leaving the branch and anchor as-is"
             exit 0
           fi
