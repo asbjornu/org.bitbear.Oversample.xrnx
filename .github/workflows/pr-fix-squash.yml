@@ -10,8 +10,8 @@ permissions:
 concurrency:
   group: fixer-squash-${{ github.event.pull_request.number }}
   # Queue instead of cancel: a run cancelled between writing the anchor and the
-  # force-push (or its rollback) would strand the anchor at an unpublished SHA,
-  # and later runs for the same review would then fail the ancestor check.
+  # force-push would strand the anchor at an unpublished SHA, and later runs for
+  # the same review would then fall back to the dispatch head.
   # --force-with-lease still stops a stale queued run from clobbering a newer
   # push.
   cancel-in-progress: false
