@@ -222,11 +222,25 @@ jobs:
           # — and writes the anchor — before that run starts.
           new_head=$(git rev-parse HEAD)
           git push --force-with-lease origin "HEAD:$HEAD_REF" || true
-          remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" | cut -f1)
-          if [ "$remote_head" = "$new_head" ]; then
+
+          # Verify the remote head. A transient ls-remote failure must not abort
+          # the step under `set -e` (that would strand the anchor after a landed
+          # push), so retry it and treat exhaustion as a visible failure.
+          remote_head=""
+          verify_ok=""
+          for _ in 1 2 3; do
+            if remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" 2>/dev/null | cut -f1); then
+              verify_ok=1
+              break
+            fi
+            remote_head=""
+            sleep 3
+          done
+
+          if [ "$verify_ok" = "1" ] && [ "$remote_head" = "$new_head" ]; then
             echo "Squashed and force-pushed $HEAD_REF"
             # The push already rewrote the range, so a missing anchor is
-            # unrecoverable: retry, then fail visibly and ask for a fresh review
+            # unrecoverable: retry, then fall through to the recovery path below
             # instead of reporting success that strands the next run.
             anchor_ok=""
             for _ in 1 2 3; do
@@ -236,14 +250,17 @@ jobs:
               fi
               sleep 3
             done
-            if [ -z "$anchor_ok" ]; then
-              echo "Could not record the squash anchor at $new_head; requesting a review" >&2
-              gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
-                -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
-              exit 1
+            if [ -n "$anchor_ok" ]; then
+              exit 0
             fi
+            echo "Could not record the squash anchor at $new_head" >&2
           else
-            # The push did not land (or the branch moved); leave the anchor at
-            # the last published head so a later run can retry.
-            echo "Squash push did not land (remote at ${remote_head:0:12}); anchor unchanged" >&2
+            echo "Squash did not land or could not be verified (remote at ${remote_head:0:12})" >&2
           fi
+
+          # No synchronize fired, so nothing will retry: request a fresh review
+          # (the recovery path) and fail visibly.
+          echo "Requesting a fresh review to recover the round" >&2
+          gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+          exit 1
