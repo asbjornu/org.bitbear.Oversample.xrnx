@@ -9,7 +9,12 @@ permissions:
 
 concurrency:
   group: fixer-squash-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Queue instead of cancel: a run cancelled between writing the anchor and the
+  # force-push (or its rollback) would strand the anchor at an unpublished SHA,
+  # and later runs for the same review would then fail the ancestor check.
+  # --force-with-lease still stops a stale queued run from clobbering a newer
+  # push.
+  cancel-in-progress: false
 
 jobs:
   squash:
@@ -203,6 +208,7 @@ jobs:
           # push emits a synchronize event whose new run cancels this one
           # (concurrency cancel-in-progress), so a post-push write can be lost.
           new_head=$(git rev-parse HEAD)
+          anchor_written=""
           if write_anchor "$new_head"; then
             anchor_written=1
           else
