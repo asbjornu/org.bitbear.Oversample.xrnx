@@ -68,6 +68,13 @@ jobs:
           if [ -z "$anchor_head" ] || [ "$anchor_review" != "$marker_review" ]; then
             anchor_head="$marker_head"
           fi
+          # A same-review anchor can point at an unpublished SHA when a rollback
+          # failed; fall back to the dispatch head so the round can still squash
+          # instead of stalling on the ancestor check.
+          if [ -n "$anchor_head" ] && ! git merge-base --is-ancestor "$anchor_head" HEAD; then
+            echo "Anchor $anchor_head is not an ancestor; falling back to the dispatch head" >&2
+            anchor_head="$marker_head"
+          fi
           if [ -z "$anchor_head" ] || ! git merge-base --is-ancestor "$anchor_head" HEAD; then
             echo "No active fixer dispatch for this head; nothing to squash"
             exit 0
@@ -205,8 +212,8 @@ jobs:
 
           # The rebase rewrote every SHA in the range, so the anchor is no longer
           # an ancestor of the new tip. Write the new anchor BEFORE pushing: the
-          # push emits a synchronize event whose new run cancels this one
-          # (concurrency cancel-in-progress), so a post-push write can be lost.
+          # push emits a synchronize event whose queued run must find the updated
+          # anchor, so a post-push write would be too late.
           new_head=$(git rev-parse HEAD)
           anchor_written=""
           if write_anchor "$new_head"; then
@@ -222,8 +229,12 @@ jobs:
           if git push --force-with-lease origin "HEAD:$HEAD_REF"; then
             echo "Squashed and force-pushed $HEAD_REF"
           else
-            # Restore the previous anchor so a later run can retry.
-            write_anchor "$anchor_head" >/dev/null 2>&1 || true
+            # Restore the previous anchor so a later run can retry. If this
+            # fails, the ancestor fallback above re-anchors from the dispatch
+            # head on the next run.
+            if ! write_anchor "$anchor_head"; then
+              echo "Could not roll the squash anchor back to $anchor_head" >&2
+            fi
             echo "Squash push failed; leaving the branch untouched"
             exit 0
           fi
