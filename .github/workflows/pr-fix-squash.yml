@@ -45,6 +45,7 @@ jobs:
             --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
             | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
           marker_id=$(printf '%s' "$marker" | awk -F'\t' '{ print $2 }')
+          marker_body=$(printf '%s' "$marker" | cut -f4-)
           marker_head=$(printf '%s' "$marker" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
           if [ -z "$marker_head" ] || ! git merge-base --is-ancestor "$marker_head" HEAD; then
             echo "No active fixer dispatch for this head; nothing to squash"
@@ -124,7 +125,11 @@ jobs:
                       break
                     fi
                   done
-                else
+                fi
+                # Fall back to subject matching when the recorded target SHA is
+                # absent or stale (a prior force-push rewrote it). Without this,
+                # such a fixup is left unfolded in the todo as a normal commit.
+                if [ -z "$found" ]; then
                   target="${subj[$i]#fixup! }"
                   j=$((i-1))
                   while [ $j -ge 0 ]; do
@@ -157,6 +162,16 @@ jobs:
           if GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --rebase-merges "$base" \
             && git push --force-with-lease origin "HEAD:$HEAD_REF"; then
             echo "Squashed and force-pushed $HEAD_REF"
+            # The force-push rewrote every SHA in the range, so the marker's
+            # recorded head is no longer an ancestor of the new tip. Advance it
+            # in place, otherwise the next fixer push in this round fails the
+            # ancestor check above and its fixups are never squashed.
+            new_head=$(git rev-parse HEAD)
+            if [ -n "$marker_id" ] && [ -n "$marker_body" ]; then
+              updated_body=$(printf '%s' "$marker_body" | sed -E "s/head=[0-9a-f]+/head=$new_head/")
+              gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="$updated_body" >/dev/null 2>&1 \
+                || echo "Could not advance the dispatch marker to $new_head" >&2
+            fi
           else
             git rebase --abort >/dev/null 2>&1 || true
             echo "Squash failed; clearing the dispatch marker and requesting a review"
