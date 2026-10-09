@@ -68,9 +68,11 @@ jobs:
           if [ -z "$anchor_head" ] || [ "$anchor_review" != "$marker_review" ]; then
             anchor_head="$marker_head"
           fi
-          # A same-review anchor can point at an unpublished SHA when a rollback
-          # failed; fall back to the dispatch head so the round can still squash
-          # instead of stalling on the ancestor check.
+          # Safety net: if the branch was force-pushed by something else, the
+          # same-review anchor may no longer be an ancestor. Fall back to the
+          # dispatch head so the round can still squash. (The anchor is only ever
+          # written after a verified push, so it does not point at an unpublished
+          # SHA.)
           if [ -n "$anchor_head" ] && ! git merge-base --is-ancestor "$anchor_head" HEAD; then
             echo "Anchor $anchor_head is not an ancestor; falling back to the dispatch head" >&2
             anchor_head="$marker_head"
@@ -210,30 +212,21 @@ jobs:
             exit 0
           fi
 
-          # The rebase rewrote every SHA in the range, so the anchor is no longer
-          # an ancestor of the new tip. Write the new anchor BEFORE pushing: the
-          # push emits a synchronize event whose queued run must find the updated
-          # anchor, so a post-push write would be too late.
+          # Push first, then record the anchor only once the remote actually has
+          # the new tip. Writing the anchor before (or regardless of) the push
+          # can strand it at an unpublished SHA. The synchronize run the push
+          # triggers is queued (cancel-in-progress: false), so this run finishes
+          # — and writes the anchor — before that run starts.
           new_head=$(git rev-parse HEAD)
-          anchor_written=""
-          if write_anchor "$new_head"; then
-            anchor_written=1
-          else
-            echo "Could not write the squash anchor at $new_head; not pushing" >&2
-          fi
-          if [ -z "$anchor_written" ]; then
-            echo "Squash aborted; the remote branch and its anchor are unchanged"
-            exit 0
-          fi
-
-          if git push --force-with-lease origin "HEAD:$HEAD_REF"; then
+          git push --force-with-lease origin "HEAD:$HEAD_REF" || true
+          remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" | cut -f1)
+          if [ "$remote_head" = "$new_head" ]; then
             echo "Squashed and force-pushed $HEAD_REF"
+            if ! write_anchor "$new_head"; then
+              echo "Could not record the squash anchor at $new_head" >&2
+            fi
           else
-            # A nonzero push status does not prove the remote rejected the
-            # update: the connection can drop after the server accepts it. Do
-            # NOT roll the anchor back; leaving new_head lets the ancestor
-            # fallback above cover both outcomes (an unpublished new_head falls
-            # back to the dispatch head; an accepted push is already correct).
-            echo "Squash push reported failure; leaving the branch and anchor as-is"
-            exit 0
+            # The push did not land (or the branch moved); leave the anchor at
+            # the last published head so a later run can retry.
+            echo "Squash push did not land (remote at ${remote_head:0:12}); anchor unchanged" >&2
           fi
