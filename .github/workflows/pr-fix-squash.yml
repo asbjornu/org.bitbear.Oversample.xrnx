@@ -39,46 +39,53 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
 
-          # Anchor the rewrite to a token-authored dispatch marker whose
-          # recorded head is an ancestor of the current head.
+          # The orchestrator owns the dispatch marker; this workflow must never
+          # write it, because a concurrent orchestrator PATCH would be clobbered
+          # by a read/modify/write. Read it only, for the dispatch head + review.
           marker=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
             | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
-          marker_id=$(printf '%s' "$marker" | awk -F'\t' '{ print $2 }')
           marker_head=$(printf '%s' "$marker" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
           marker_review=$(printf '%s' "$marker" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
-          marker_round=$(printf '%s' "$marker" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
-          marker_run=$(printf '%s' "$marker" | sed -n 's/.*run=\([0-9a-z]*\).*/\1/p')
-          if [ -z "$marker_head" ] || ! git merge-base --is-ancestor "$marker_head" HEAD; then
+
+          # This workflow owns a separate anchor comment, so it has a single
+          # writer (its own runs are serialized by the concurrency group) and can
+          # never clobber the orchestrator's dispatch state. It records the head
+          # already squashed for the current review round.
+          anchor=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.body | contains("<!-- aw-pr-fix-squash-anchor")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
+            | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
+          anchor_id=$(printf '%s' "$anchor" | awk -F'\t' '{ print $2 }')
+          anchor_review=$(printf '%s' "$anchor" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+          anchor_head=$(printf '%s' "$anchor" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
+          # Start each round from the orchestrator's dispatch head; reuse this
+          # workflow's own anchor only within the same round.
+          if [ -z "$anchor_head" ] || [ "$anchor_review" != "$marker_review" ]; then
+            anchor_head="$marker_head"
+          fi
+          if [ -z "$anchor_head" ] || ! git merge-base --is-ancestor "$anchor_head" HEAD; then
             echo "No active fixer dispatch for this head; nothing to squash"
             exit 0
           fi
 
-          # Re-read the marker and swap only its head, so a concurrent orchestrator
-          # PATCH that changed review/round/run is preserved rather than
-          # overwritten with a stale snapshot. If the dispatch changed since this
-          # run started, leave the marker alone and report failure so the caller
-          # aborts before pushing.
-          advance_marker() {
-            local want="$1" body review round run
-            body=$(gh api "repos/$REPO/issues/comments/$marker_id" --jq '.body' 2>/dev/null) || return 1
-            review=$(printf '%s' "$body" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
-            round=$(printf '%s' "$body" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
-            run=$(printf '%s' "$body" | sed -n 's/.*run=\([0-9a-z]*\).*/\1/p')
-            if [ "$review" != "$marker_review" ] || [ "$round" != "$marker_round" ] \
-               || [ "$run" != "$marker_run" ]; then
-              echo "Dispatch changed (review=$review round=$round run=$run); not advancing the marker" >&2
-              return 1
+          # Write the squash anchor (create once, then update in place). Only this
+          # workflow writes it, so no cross-workflow race is possible.
+          write_anchor() {
+            local head="$1" body
+            body="<!-- aw-pr-fix-squash-anchor review=$marker_review head=$head -->"
+            if [ -n "$anchor_id" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$anchor_id" -f body="$body" >/dev/null 2>&1
+            else
+              anchor_id=$(gh api -X POST "repos/$REPO/issues/$PR/comments" \
+                -f body="$body" --jq '.id')
             fi
-            body=$(printf '%s' "$body" | sed -E "s/head=[0-9a-f]+/head=$want/")
-            gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="$body" >/dev/null 2>&1
           }
 
           # Only commits pushed after the dispatch head are eligible: every one
           # must be the fixer's and at least one must be a fixup!, so a
           # contributor push in the window aborts the rewrite.
           head=$(git rev-parse HEAD)
-          cmp=$(gh api "repos/$REPO/compare/$marker_head...$head" 2>/dev/null || echo '{}')
+          cmp=$(gh api "repos/$REPO/compare/$anchor_head...$head" 2>/dev/null || echo '{}')
           total=$(printf '%s' "$cmp" | jq -r '.total_commits // 0')
           seen=$(printf '%s' "$cmp" | jq -r '(.commits // []) | length')
           if [ "${total:-0}" -gt "${seen:-0}" ] 2>/dev/null; then
@@ -183,29 +190,26 @@ jobs:
 
           if ! GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --rebase-merges "$base"; then
             git rebase --abort >/dev/null 2>&1 || true
-            echo "Squash failed; clearing the dispatch marker and requesting a review"
-            if [ -n "$marker_id" ]; then
-              gh api -X DELETE "repos/$REPO/issues/comments/$marker_id" >/dev/null 2>&1 || true
-            fi
+            # Never touch the orchestrator's marker here; request a fresh review
+            # so a new round re-anchors and retries.
+            echo "Squash failed; requesting a review"
             gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
               -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
             exit 0
           fi
 
-          # The rebase rewrote every SHA in the range, so the marker's recorded
-          # head is no longer an ancestor of the new tip. Advance it BEFORE
-          # pushing: the push emits a synchronize event whose new run cancels
-          # this one (concurrency cancel-in-progress), so a post-push PATCH can
-          # be lost. If the advance fails (e.g. a concurrent dispatch changed the
-          # marker), abort rather than push and leave the anchor stale.
+          # The rebase rewrote every SHA in the range, so the anchor is no longer
+          # an ancestor of the new tip. Write the new anchor BEFORE pushing: the
+          # push emits a synchronize event whose new run cancels this one
+          # (concurrency cancel-in-progress), so a post-push write can be lost.
           new_head=$(git rev-parse HEAD)
-          if advance_marker "$new_head"; then
-            marker_advanced=1
+          if write_anchor "$new_head"; then
+            anchor_written=1
           else
-            echo "Could not advance the dispatch marker to $new_head; not pushing" >&2
+            echo "Could not write the squash anchor at $new_head; not pushing" >&2
           fi
-          if [ -z "$marker_advanced" ]; then
-            echo "Squash aborted; the remote branch and its marker are unchanged"
+          if [ -z "$anchor_written" ]; then
+            echo "Squash aborted; the remote branch and its anchor are unchanged"
             exit 0
           fi
 
@@ -213,7 +217,7 @@ jobs:
             echo "Squashed and force-pushed $HEAD_REF"
           else
             # Restore the previous anchor so a later run can retry.
-            advance_marker "$marker_head" >/dev/null 2>&1 || true
+            write_anchor "$anchor_head" >/dev/null 2>&1 || true
             echo "Squash push failed; leaving the branch untouched"
             exit 0
           fi
