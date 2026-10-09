@@ -9,7 +9,12 @@ permissions:
 
 concurrency:
   group: fixer-squash-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Queue instead of cancel: a run cancelled between writing the anchor and the
+  # force-push would strand the anchor at an unpublished SHA, and later runs for
+  # the same review would then fall back to the dispatch head.
+  # --force-with-lease still stops a stale queued run from clobbering a newer
+  # push.
+  cancel-in-progress: false
 
 jobs:
   squash:
@@ -39,23 +44,65 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           base=$(git merge-base "origin/$BASE_REF" HEAD)
 
-          # Anchor the rewrite to a token-authored dispatch marker whose
-          # recorded head is an ancestor of the current head.
+          # The orchestrator owns the dispatch marker; this workflow must never
+          # write it, because a concurrent orchestrator PATCH would be clobbered
+          # by a read/modify/write. Read it only, for the dispatch head + review.
           marker=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
             --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
             | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
-          marker_id=$(printf '%s' "$marker" | awk -F'\t' '{ print $2 }')
           marker_head=$(printf '%s' "$marker" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
-          if [ -z "$marker_head" ] || ! git merge-base --is-ancestor "$marker_head" HEAD; then
+          marker_review=$(printf '%s' "$marker" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+
+          # This workflow owns a separate anchor comment, so it has a single
+          # writer (its own runs are serialized by the concurrency group) and can
+          # never clobber the orchestrator's dispatch state. It records the head
+          # already squashed for the current review round.
+          anchor=$(gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.body | contains("<!-- aw-pr-fix-squash-anchor")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' \
+            | sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
+          anchor_id=$(printf '%s' "$anchor" | awk -F'\t' '{ print $2 }')
+          anchor_review=$(printf '%s' "$anchor" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
+          anchor_head=$(printf '%s' "$anchor" | sed -n 's/.*head=\([0-9a-f]*\).*/\1/p')
+          # Pick an anchor that is an ancestor of HEAD. Prefer, in order: this
+          # workflow's own anchor for the same round, then the orchestrator's
+          # dispatch head, then this workflow's anchor from an earlier round.
+          # A concurrent re-dispatch can record a head this run already rewrote,
+          # so the dispatch head is used only when it is still an ancestor.
+          published_anchor="$anchor_head"
+          anchor_head=""
+          if [ -n "$marker_review" ] && [ "$anchor_review" = "$marker_review" ] \
+             && [ -n "$published_anchor" ] \
+             && git merge-base --is-ancestor "$published_anchor" HEAD; then
+            anchor_head="$published_anchor"
+          elif [ -n "$marker_head" ] && git merge-base --is-ancestor "$marker_head" HEAD; then
+            anchor_head="$marker_head"
+          elif [ -n "$published_anchor" ] && git merge-base --is-ancestor "$published_anchor" HEAD; then
+            echo "Dispatch head is not an ancestor; keeping the published anchor $published_anchor" >&2
+            anchor_head="$published_anchor"
+          fi
+          if [ -z "$anchor_head" ]; then
             echo "No active fixer dispatch for this head; nothing to squash"
             exit 0
           fi
+
+          # Write the squash anchor (create once, then update in place). Only this
+          # workflow writes it, so no cross-workflow race is possible.
+          write_anchor() {
+            local head="$1" body
+            body="<!-- aw-pr-fix-squash-anchor review=$marker_review head=$head -->"
+            if [ -n "$anchor_id" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$anchor_id" -f body="$body" >/dev/null 2>&1
+            else
+              anchor_id=$(gh api -X POST "repos/$REPO/issues/$PR/comments" \
+                -f body="$body" --jq '.id')
+            fi
+          }
 
           # Only commits pushed after the dispatch head are eligible: every one
           # must be the fixer's and at least one must be a fixup!, so a
           # contributor push in the window aborts the rewrite.
           head=$(git rev-parse HEAD)
-          cmp=$(gh api "repos/$REPO/compare/$marker_head...$head" 2>/dev/null || echo '{}')
+          cmp=$(gh api "repos/$REPO/compare/$anchor_head...$head" 2>/dev/null || echo '{}')
           total=$(printf '%s' "$cmp" | jq -r '.total_commits // 0')
           seen=$(printf '%s' "$cmp" | jq -r '(.commits // []) | length')
           if [ "${total:-0}" -gt "${seen:-0}" ] 2>/dev/null; then
@@ -124,7 +171,11 @@ jobs:
                       break
                     fi
                   done
-                else
+                fi
+                # Fall back to subject matching when the recorded target SHA is
+                # absent or stale (a prior force-push rewrote it). Without this,
+                # such a fixup is left unfolded in the todo as a normal commit.
+                if [ -z "$found" ]; then
                   target="${subj[$i]#fixup! }"
                   j=$((i-1))
                   while [ $j -ge 0 ]; do
@@ -154,15 +205,62 @@ jobs:
           SCRIPT
           chmod +x /tmp/seq-editor.sh
 
-          if GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --rebase-merges "$base" \
-            && git push --force-with-lease origin "HEAD:$HEAD_REF"; then
-            echo "Squashed and force-pushed $HEAD_REF"
-          else
+          if ! GIT_SEQUENCE_EDITOR=/tmp/seq-editor.sh GIT_EDITOR=: git rebase -i --rebase-merges "$base"; then
             git rebase --abort >/dev/null 2>&1 || true
-            echo "Squash failed; clearing the dispatch marker and requesting a review"
-            if [ -n "$marker_id" ]; then
-              gh api -X DELETE "repos/$REPO/issues/comments/$marker_id" >/dev/null 2>&1 || true
-            fi
+            # Never touch the orchestrator's marker here; request a fresh review
+            # so a new round re-anchors and retries.
+            echo "Squash failed; requesting a review"
             gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
               -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+            exit 0
           fi
+
+          # Push first, then record the anchor only once the remote actually has
+          # the new tip. Writing the anchor before (or regardless of) the push
+          # can strand it at an unpublished SHA. The synchronize run the push
+          # triggers is queued (cancel-in-progress: false), so this run finishes
+          # — and writes the anchor — before that run starts.
+          new_head=$(git rev-parse HEAD)
+          git push --force-with-lease origin "HEAD:$HEAD_REF" || true
+
+          # Verify the remote head. A transient ls-remote failure must not abort
+          # the step under `set -e` (that would strand the anchor after a landed
+          # push), so retry it and treat exhaustion as a visible failure.
+          remote_head=""
+          verify_ok=""
+          for _ in 1 2 3; do
+            if remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" 2>/dev/null | cut -f1); then
+              verify_ok=1
+              break
+            fi
+            remote_head=""
+            sleep 3
+          done
+
+          if [ "$verify_ok" = "1" ] && [ "$remote_head" = "$new_head" ]; then
+            echo "Squashed and force-pushed $HEAD_REF"
+            # The push already rewrote the range, so a missing anchor is
+            # unrecoverable: retry, then fall through to the recovery path below
+            # instead of reporting success that strands the next run.
+            anchor_ok=""
+            for _ in 1 2 3; do
+              if write_anchor "$new_head"; then
+                anchor_ok=1
+                break
+              fi
+              sleep 3
+            done
+            if [ -n "$anchor_ok" ]; then
+              exit 0
+            fi
+            echo "Could not record the squash anchor at $new_head" >&2
+          else
+            echo "Squash did not land or could not be verified (remote at ${remote_head:0:12})" >&2
+          fi
+
+          # No synchronize fired, so nothing will retry: request a fresh review
+          # (the recovery path) and fail visibly.
+          echo "Requesting a fresh review to recover the round" >&2
+          gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+            -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1 || true
+          exit 1
