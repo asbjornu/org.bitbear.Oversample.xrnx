@@ -79,7 +79,7 @@ jobs:
               && { [ "$status" = "ahead" ] || [ "$status" = "identical" ]; } \
               && [ -n "$range_authors" ] \
               && printf '%s\n' "$range_authors" | is_all_bot; then
-              echo "Head has only fixer commits under an active dispatch; the squash workflow will re-request"
+              echo "Head has only fixer commits under an active dispatch; the squash workflow folds them and the ensuing push re-requests"
               exit 0
             fi
             echo "Fixer fixup! commits present but no purely-fixer active dispatch; requesting a review"
