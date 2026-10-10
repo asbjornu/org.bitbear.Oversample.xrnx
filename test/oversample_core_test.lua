@@ -318,67 +318,6 @@ function TestNearestChoiceIndex:test_empty_choices_returns_one()
 end
 
 
---------------------------------------------------------------------------------
--- resolve_target_indices
---
--- Mirrors the logic used by "set to min/max": only the known oversampling
--- parameter(s) plus the row's selected primary/secondary are returned.
-
-TestResolveTargetIndices = {}
-
-function TestResolveTargetIndices:test_known_list_device_returns_primary_and_secondary()
-   -- Names parallel to 1-based parameter indices.
-   local names = { "Gain", "Processing Mode", "Mix", "Processing Resolution", "Output" }
-   local targets = core.resolve_target_indices(names, "VST: FabFilter: Pro-Q 3", {})
-   lu.assertEquals(targets, { 2, 4 })
-end
-
-function TestResolveTargetIndices:test_selected_by_index_only()
-   local names = { "Gain", "Oversampling", "Mix" }
-   local targets = core.resolve_target_indices(names, "Unknown Device",
-      { parameter_index = 3 })
-   lu.assertEquals(targets, { 3 })
-end
-
-function TestResolveTargetIndices:test_selected_by_name_uses_match_parameter()
-   -- "Oversampling" should match the real "Oversampling Rate" via substring.
-   local names = { "Gain", "Oversampling Rate", "Mix" }
-   local targets = core.resolve_target_indices(names, "VST: FabFilter: Pro-C 2",
-      { parameter_name = "Oversampling" })
-   lu.assertEquals(targets, { 2 })
-end
-
-function TestResolveTargetIndices:test_deduplicates_known_and_selected()
-   local names = { "Gain", "Processing Mode", "Mix", "Processing Resolution" }
-   local targets = core.resolve_target_indices(names, "VST: FabFilter: Pro-Q 3",
-      { parameter_name = "Processing Mode", parameter_index = 2,
-        secondary_parameter_name = "Processing Resolution", secondary_parameter_index = 4 })
-   -- Each index appears exactly once despite being named and indexed.
-   lu.assertEquals(targets, { 2, 4 })
-end
-
-function TestResolveTargetIndices:test_includes_row_secondary_by_name()
-   local names = { "Gain", "Processing Mode", "Mix", "Processing Resolution" }
-   local targets = core.resolve_target_indices(names, "VST: FabFilter: Pro-Q 3",
-      { parameter_name = "Gain", parameter_index = 1,
-        secondary_parameter_name = "Mix", secondary_parameter_index = 3 })
-   lu.assertEquals(targets, { 2, 4, 1, 3 })
-end
-
-function TestResolveTargetIndices:test_out_of_range_index_ignored()
-   local names = { "Gain", "Oversampling" }
-   local targets = core.resolve_target_indices(names, "Unknown Device",
-      { parameter_index = 99 })
-   lu.assertEquals(targets, {})
-end
-
-function TestResolveTargetIndices:test_unmatched_name_ignored()
-   local names = { "Gain", "Oversampling" }
-   local targets = core.resolve_target_indices(names, "Unknown Device",
-      { parameter_name = "Does Not Exist" })
-   lu.assertEquals(targets, {})
-end
-
 
 --------------------------------------------------------------------------------
 -- normalize_device_name (format-prefix stripping)
@@ -1007,7 +946,7 @@ end
 
 
 --------------------------------------------------------------------------------
--- VST3 XML patching (patch_osig_xml / detect_label_xml / first_label)
+-- VST3 XML patching (patch_osig_xml / detect_label_xml)
 --
 -- The chunk lives base64-encoded inside <ParameterChunk><![CDATA[…]]></ParameterChunk>;
 -- the helpers decode, patch/detect on the binary, then re-encode.
@@ -1058,16 +997,6 @@ function TestOsigXml:test_detect_returns_nil_without_parameter_chunk()
     lu.assertIsNil(core.detect_label_xml("<SomeOtherTag/>", entries))
 end
 
-function TestOsigXml:test_first_label_and_empty_cases()
-    local entries = core.diff_blobs_multi({ string.char(0, 1), string.char(9, 9) }, { "Off", "2x" })
-    -- first_label returns next(entries[1].values); the concrete key order is
-    -- implementation-defined (hash-based in Lua 5.1/JIT), so accept either label.
-    local fl = core.first_label(entries)
-    lu.assertNotIsNil(fl)
-    lu.assertTrue(fl == "Off" or fl == "2x", "unexpected first label: " .. tostring(fl))
-    lu.assertIsNil(core.first_label({}))
-    lu.assertIsNil(core.first_label(nil))
-end
 
 
 --------------------------------------------------------------------------------
