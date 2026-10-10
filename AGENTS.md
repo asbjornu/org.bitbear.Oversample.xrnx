@@ -119,6 +119,22 @@ gh api graphql -f query='mutation($id:ID!){minimizeComment(input:{subjectId:$id,
 The automated PR Fixer already resolves the Copilot threads it fixes
 (`pr-fix.md` step 5); hiding is done by the agent or a human.
 
+## PR fixer squash
+
+`pr-fix-squash.yml` is stateless. On every `synchronize` event for a
+same-repository pull request opened by the configured author
+(`github.event.pull_request.user.login`, not the pusher) it gates on a
+`fixup!` commit in `merge-base..HEAD`; if one exists it runs
+`git rebase -i --autosquash --rebase-merges <merge-base>` (folding every
+`fixup!` regardless of author) and pushes with `--force-with-lease`. It
+reads and writes no marker or anchor comment, so there is no shared state
+to race on, and `--force-with-lease` rejects the push if the remote head
+moved after checkout. With no `fixup!` present it is a no-op.
+
+The fixer creates the `fixup!` commits (`pr-fix.md`); the branch is
+fixer-managed between rounds, so a human who pushes commits to it may
+need to reset after the squash re-SHAs them.
+
 ## Renoise ViewBuilder layout rules
 
 Detailed, load-on-demand. See the `renoise-viewbuilder-layout` skill
