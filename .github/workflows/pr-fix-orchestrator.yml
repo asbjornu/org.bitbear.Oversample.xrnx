@@ -212,14 +212,13 @@ jobs:
               continue
             fi
 
-            # Write a pending marker before dispatch, so the squash workflow
-            # sees an active dispatch even if the fixer pushes before we observe
-            # its run. The run id is filled in once the run appears.
+            # Write a pending marker before dispatch. The run id is filled in
+            # once the run appears.
             review_url="$SERVER_URL/$REPO/pull/$pr#pullrequestreview-$review"
             # Keep the machine marker and the human summary on one line: the
-            # aw-pr-fix-state body is split by line before the field/line
-            # readers in this workflow and in pr-fix-squash.yml parse it, so a
-            # newline would corrupt marker ID extraction. The marker goes after
+            # aw-pr-fix-state body is split by line before this workflow's
+            # field/line readers parse it, so a newline would corrupt marker ID
+            # extraction. The marker goes after
             # the summary, not before it: a leading "<!-- ... -->" makes
             # CommonMark treat the entire line as a raw-HTML block, so the
             # summary's Markdown would render as literal text instead.
@@ -264,8 +263,7 @@ jobs:
             # PATCH (never POST) keeps the marker and this summary in one
             # comment across cycles; a POST would duplicate it. The body stays
             # single-line (summary first, marker last, as above) so the marker
-            # ID readers (here and in pr-fix-squash.yml) can split it by line
-            # and extract fields.
+            # field/line readers here can split it by line and extract fields.
             # Do not swallow a failed write: if the marker is left at
             # run=none, the next cycle loses the failure report and re-dispatches
             # the same review. Retry, then fall back to a fresh state comment so
