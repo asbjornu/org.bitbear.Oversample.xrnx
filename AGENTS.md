@@ -68,7 +68,8 @@ remains available even when High Quality is Off.
   helpers), `lib/oversample/devices.lua` (song scanning, live instances,
   parameter enumeration, device/preset notifiers), `lib/oversample/osig.lua`
   (osig labels/order and VST3 state-chunk patching),
-  `lib/ProcessSlicer.lua`, `main.lua` (menu entry `Main
+  `lib/oversample/layout.lua` (dialog shell, fixed column widths, settings-grid
+  view construction), `lib/ProcessSlicer.lua`, `main.lua` (menu entry `Main
   Menu:Tools:Oversample`). Modules live under `lib/`, which `main.lua` puts on
   `package.path` via `renoise.tool().bundle_path` (so requires are
   `require("oversample/state")`, not `lib/oversample/state`).
