@@ -11,7 +11,7 @@ return function(deps)
     local list_count = deps.list_count
     local process_slicer = deps.process_slicer
     local vb = deps.ui.vb
-    local set_main_buttons_active = deps.ui.set_main_buttons_active
+    local activity = deps.ui.activity
     local on_song_devices_changed = deps.ui.on_song_devices_changed
 
     local match_parameter = core.match_parameter
@@ -207,7 +207,7 @@ return function(deps)
             end
 
             for t = 1, list_count(song.tracks) do
-                set_main_buttons_active(false)
+                activity.set(false)
 
                 if state.dialog and not state.dialog.visible then
                     print('Dialog closed, stopping.')
@@ -222,7 +222,7 @@ return function(deps)
                 coroutine.yield()
             end
 
-            set_main_buttons_active(true)
+            activity.set(true)
         end, debug.traceback)
         if not ok then
             print("OVERSAMPLE enumerate_tracks ERROR:\n" .. tostring(err))
@@ -231,7 +231,7 @@ return function(deps)
 
     function devices.enumerate_devices(track)
         local ok, err = xpcall(function()
-            set_main_buttons_active(false)
+            activity.set(false)
 
             for d = 1, list_count(track.devices) do
                 if state.dialog and not state.dialog.visible then
@@ -365,13 +365,13 @@ return function(deps)
 
     function devices.enumerate_parameters(device_name)
         if state.dialog and state.dialog.visible and vb.views.set_values_button then
-            set_main_buttons_active(false)
+            activity.set(false)
         end
 
         local parameters = devices.get_parameters(device_name)
 
         if state.dialog and state.dialog.visible and vb.views.set_values_button then
-            set_main_buttons_active(true)
+            activity.set(true)
         end
 
         return parameters

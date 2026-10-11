@@ -12,7 +12,7 @@ return function(deps)
     local devices = deps.devices
     local vb = deps.vb
     local create_settings_row_identifiers = deps.create_settings_row_identifiers
-    local set_main_buttons_active = deps.set_main_buttons_active
+    local activity = deps.activity
     local mark_parameter_scan_started = deps.mark_parameter_scan_started
     local mark_parameter_scan_finished = deps.mark_parameter_scan_finished
     local process_slicer = deps.process_slicer
@@ -582,7 +582,7 @@ local function apply_parameter_value(row_number, device_name, parameter_name)
 end
 
 local function device_selected(device_index, device_name, parameter_popup_id, row_number)
-    set_main_buttons_active(false)
+    activity.set(false)
     state.selected_devices[row_number] = {
          device_name = device_name,
          device_index = device_index
@@ -605,7 +605,7 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
         -- No scan is started on this path, so it must not touch the shared
         -- pending-scan counter: doing so would steal a decrement from another
         -- row's in-flight scan and report "Done." too early.
-        set_main_buttons_active(true)
+        activity.set(true)
         return
     end
 
@@ -659,7 +659,7 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
         end
 
         mark_parameter_scan_finished()
-        set_main_buttons_active(true)
+        activity.set(true)
     end
 
     if state.cached_parameters[device_name] then
@@ -681,7 +681,7 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
         -- Reflect the known parameter's current value on the slider right away,
         -- without waiting for the full parameter scan to complete.
         apply_parameter_value(row_number, device_name, known_primary_name)
-        set_main_buttons_active(true)
+        activity.set(true)
     else
         vb.views.status.text = 'Finding parameters...'
     end
@@ -701,9 +701,9 @@ local function parameter_selected(parameter_index, parameter_name, device_name, 
     state.selected_devices[row_number].parameter_name = parameter_name
     state.selected_devices[row_number].parameter_index = parameter_index
 
-    set_main_buttons_active(false)
+    activity.set(false)
     set_value_control(row_number, device_name, device_instances, parameter_index)
-    set_main_buttons_active(true)
+    activity.set(true)
 end
 
 local function parameter_value_changed(parameter_value, _parameter_name, _device_name, row_number)
@@ -716,7 +716,7 @@ end
 -- plugin here; the separate "Set" button applies the resulting UI state to the
 -- devices. This lets the user see the extreme before committing it.
 local function extreme_values(extreme)
-    set_main_buttons_active(false)
+    activity.set(false)
 
     local verb = (extreme == "min") and "minimum" or "maximum"
     if vb.views.status then
@@ -880,7 +880,7 @@ local function extreme_values(extreme)
         if vb.views.status then
             vb.views.status.text = 'Controls set to ' .. verb .. '.'
         end
-        set_main_buttons_active(true)
+        activity.set(true)
     end
 
     local slicer = process_slicer(process, done)

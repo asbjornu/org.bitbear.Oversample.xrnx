@@ -13,10 +13,14 @@ local list_count = cache.list_count
 -- definitions use `function name(...)` and assign to the local.
 local on_song_devices_changed, oversample_on_new_song, oversample_init
 local oversample, destroy
-local set_main_buttons_active
 local set_values
 
 local vb = renoise.ViewBuilder()
+
+-- The abstract "busy" signal: devices/parameters announce that a scan or action
+-- is in flight, and the layout module toggles the controls in response. This
+-- keeps those modules UI-agnostic and avoids a dependency cycle.
+local activity = require("oversample/activity")()
 
 -- Song scanning/instances live in oversample/devices.lua; the UI callbacks are
 -- injected as closures over the coordinator's forward-declared locals.
@@ -31,7 +35,7 @@ local devices = require("oversample/devices")({
     process_slicer = function(...) return ProcessSlicer(...) end,
     ui = {
         vb = vb,
-        set_main_buttons_active = function(active) set_main_buttons_active(active) end,
+        activity = activity,
         on_song_devices_changed = function() on_song_devices_changed() end,
     },
 })
@@ -76,7 +80,7 @@ local parameters = require("oversample/parameters")({
     devices = devices,
     vb = vb,
     create_settings_row_identifiers = create_settings_row_identifiers,
-    set_main_buttons_active = function(active) set_main_buttons_active(active) end,
+    activity = activity,
     mark_parameter_scan_started = mark_parameter_scan_started,
     mark_parameter_scan_finished = mark_parameter_scan_finished,
     process_slicer = function(...) return ProcessSlicer(...) end,
@@ -94,7 +98,7 @@ local layout = require("oversample/layout")({
     osig = osig,
     vb = vb,
     create_settings_row_identifiers = create_settings_row_identifiers,
-    set_main_buttons_active = function(active) set_main_buttons_active(active) end,
+    activity = activity,
     handlers = {
         device_selected = parameters.device_selected,
         parameter_selected = parameters.parameter_selected,
@@ -254,49 +258,9 @@ function destroy()
     vb.views["org.bitbear.Oversample"] = nil
 end
 
--- Enable/disable the three action buttons (Set, Minimize, Maximize) together,
--- mirroring the "Set" button's active state used while scans are in flight.
--- Declared local (forward-declared above) because it is invoked from several
--- top-level functions (enumerate_tracks, enumerate_devices, and the layout
--- module) that are defined before this point.
-function set_main_buttons_active(active)
-    if not vb or not vb.views then
-        return
-    end
-    for _, id in ipairs({ "set_values_button", "minimize_values_button", "maximize_values_button" }) do
-        local view = vb.views[id]
-        if view then
-            pcall(function()
-                view.active = active
-            end)
-        end
-    end
-
-    -- Disable every control in the grid while an action (Set/Minimize/Maximize) or a
-    -- background scan is in flight, so the user can't edit rows mid-operation.
-    for r = 1, state.settings_row_count do
-        local ids = create_settings_row_identifiers(r)
-        for _, key in ipairs({
-            "device_popup_id",
-            "parameter_popup_id",
-            "parameter_value_popup_id",
-            "parameter_value_slider_id",
-            "parameter_value_secondary_popup_id",
-            "add_button_id"
-        }) do
-            local view = vb.views[ids[key]]
-            if view then
-                pcall(function()
-                    view.active = active
-                end)
-            end
-        end
-    end
-end
-
 
 function set_values()
-    set_main_buttons_active(false)
+    activity.set(false)
     local parameters_changed = 0
     -- Shared across osig rows so the VST3 state-refresh save happens once per Set.
     local osig_save_state = { saved = false }
@@ -351,7 +315,7 @@ function set_values()
     end
 
     vb.views.status.text = parameters_changed .. ' parameter values set.'
-    set_main_buttons_active(true)
+    activity.set(true)
 end
 
 -- Public API consumed by main.lua.
@@ -370,7 +334,7 @@ Oversample.device_selected = parameters.device_selected
 Oversample.parameter_selected = parameters.parameter_selected
 Oversample.refresh_device_popups = layout.refresh_device_popups
 Oversample.add_device_items = layout.add_device_items
-Oversample.set_main_buttons_active = set_main_buttons_active
+Oversample.set_main_buttons_active = layout.set_main_buttons_active
 Oversample.set_values = set_values
 
 -- Internal seams the UI tests drive directly. Grouped under `_internals` so the

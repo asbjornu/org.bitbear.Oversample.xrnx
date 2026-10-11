@@ -14,7 +14,7 @@ return function(deps)
     local osig = deps.osig
     local vb = deps.vb
     local create_settings_row_identifiers = deps.create_settings_row_identifiers
-    local set_main_buttons_active = deps.set_main_buttons_active
+    local activity = deps.activity
     local handlers = deps.handlers
 
     local layout = {}
@@ -135,6 +135,48 @@ return function(deps)
         CONTENT_HEIGHT = CONTENT_HEIGHT,
         DEFAULT_CONTROL_SPACING = DEFAULT_CONTROL_SPACING,
     }
+
+    -- Enable/disable the three action buttons (Set, Minimize, Maximize) together
+    -- with every grid control while an action or background scan is in flight.
+    -- This is the concrete UI reaction to the abstract activity signal; devices
+    -- and parameters only announce that they are busy.
+    local function set_main_buttons_active(active)
+        if not vb or not vb.views then
+            return
+        end
+        for _, id in ipairs({ "set_values_button", "minimize_values_button", "maximize_values_button" }) do
+            local view = vb.views[id]
+            if view then
+                pcall(function()
+                    view.active = active
+                end)
+            end
+        end
+
+        -- Disable every control in the grid while an action (Set/Minimize/Maximize) or a
+        -- background scan is in flight, so the user can't edit rows mid-operation.
+        for r = 1, state.settings_row_count do
+            local ids = create_settings_row_identifiers(r)
+            for _, key in ipairs({
+                "device_popup_id",
+                "parameter_popup_id",
+                "parameter_value_popup_id",
+                "parameter_value_slider_id",
+                "parameter_value_secondary_popup_id",
+                "add_button_id"
+            }) do
+                local view = vb.views[ids[key]]
+                if view then
+                    pcall(function()
+                        view.active = active
+                    end)
+                end
+            end
+        end
+    end
+
+    activity.on_change(set_main_buttons_active)
+    layout.set_main_buttons_active = set_main_buttons_active
 
     -- The dialog shell (header row, settings container, footer + action buttons).
     function layout.build_dialog_view()
