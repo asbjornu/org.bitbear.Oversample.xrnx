@@ -132,8 +132,10 @@ function ProcessSlicer:__on_idle()
     if (not succeeded) then
       -- stop the process on errors
       self:stop()
-      -- and forward the error to the main thread
-      error(result[2])
+      -- and forward the error to the main thread. `table.remove` above shifted
+      -- the array left, so the error message is now at index 1 (the stock
+      -- Renoise file reads result[2] here, which rethrows nil and loses it).
+      error(result[1])
     end
 
   -- stop when the process function completed
