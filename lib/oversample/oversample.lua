@@ -65,10 +65,14 @@ local function mark_parameter_scan_finished()
     if state.pending_parameter_scans > 0 then
         state.pending_parameter_scans = state.pending_parameter_scans - 1
     end
-    if state.pending_parameter_scans == 0 then
-        vb.views.status.text = 'Done.'
-    else
-        vb.views.status.text = string.format('Finding parameters... (%d)', state.pending_parameter_scans)
+    -- The scan may finish after the dialog was closed (vb.views.status is nil
+    -- then), so guard the status write; the counter still updates.
+    if vb.views.status then
+        if state.pending_parameter_scans == 0 then
+            vb.views.status.text = 'Done.'
+        else
+            vb.views.status.text = string.format('Finding parameters... (%d)', state.pending_parameter_scans)
+        end
     end
 end
 

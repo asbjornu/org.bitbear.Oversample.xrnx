@@ -615,15 +615,27 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
 
     -- Populate the parameter dropdown from the (already known) full list, then
     -- snap to the recognised "Oversample" parameter. No waiting required.
-    local function apply_parameters(parameters)
+    -- `started` distinguishes the asynchronous scan callback (which incremented
+    -- the shared pending-scan counter) from a synchronous cache hit, so only a
+    -- started scan decrements it. device_selected disabled the controls, so
+    -- every exit path re-enables them.
+    local function apply_parameters(parameters, started)
         if not parameters then
             parameters = {}
+        end
+
+        local function finish()
+            if started then
+                mark_parameter_scan_finished()
+            end
+            activity.set(true)
         end
 
         -- Only touch the UI while the Oversample dialog (and this row's popup)
         -- still exist. The scan may finish after the dialog was closed, in which
         -- case we keep the cached result but skip the visual update.
         if not state.dialog or not state.dialog.visible or not parameters_popup then
+            finish()
             return
         end
 
@@ -639,6 +651,7 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
             end
         end
         if not has_real then
+            finish()
             return
         end
 
@@ -658,13 +671,12 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
             end
         end
 
-        mark_parameter_scan_finished()
-        activity.set(true)
+        finish()
     end
 
     if state.cached_parameters[device_name] then
         -- Already cached (this session, song, or a previous run): no scan.
-        apply_parameters(state.cached_parameters[device_name])
+        apply_parameters(state.cached_parameters[device_name], false)
         if known_primary_name then
             apply_parameter_value(row_number, device_name, known_primary_name)
         end
@@ -688,7 +700,7 @@ local function device_selected(device_index, device_name, parameter_popup_id, ro
 
     mark_parameter_scan_started()
     local slicer = process_slicer(devices.enumerate_parameters, function(return_value)
-        apply_parameters(return_value[1])
+        apply_parameters(return_value[1], true)
     end, device_name)
 
     -- print('enumerate_devices:ProcessSlicer:start')
