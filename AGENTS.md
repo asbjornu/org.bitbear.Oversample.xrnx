@@ -61,25 +61,36 @@ remains available even when High Quality is Off.
   check the worktree.
 - Other `renoise/3.x.x` branches are parallel worktrees.
   `backup/before-cleanup` preserves pre-cleanup history.
-- Key files: `Oversample/Oversample.lua` (UI + glue),
-  `Oversample/oversample_core.lua` (logic/constants),
-  `Oversample/ProcessSlicer.lua`, `main.lua` (menu entry `Main
-  Menu:Tools:Oversample`).
+- Key files: `lib/oversample/oversample.lua` (UI + glue, thin coordinator),
+  `lib/oversample/core.lua` (logic/constants),
+  `lib/oversample/state.lua` (single owner of mutable UI/cache state),
+  `lib/oversample/cache.lua` (tool/preferences persistence and merge/prune
+  helpers), `lib/oversample/devices.lua` (song scanning, live instances,
+  parameter enumeration, device/preset notifiers), `lib/oversample/osig.lua`
+  (osig labels/order and VST3 state-chunk patching),
+  `lib/oversample/layout.lua` (dialog shell, fixed column widths, settings-grid
+  view construction),   `lib/oversample/parameters.lua` (per-row
+  parameter/secondary state machine, value controls, Minimize/Maximize),
+  `lib/oversample/activity.lua` (the "busy" signal that decouples scan/parameter
+  logic from the UI), `lib/ProcessSlicer.lua`, `main.lua` (menu entry `Main
+  Menu:Tools:Oversample`). Modules live under `lib/`, which `main.lua` puts on
+  `package.path` via `renoise.tool().bundle_path` (so requires are
+  `require("oversample/state")`, not `lib/oversample/state`).
 
 ## Commit / git rules
 
 - **GPG-sign every commit**. Homebrew is installed and `gpg` is installed
   in Homebrew. Find it and use it to sign all commits.
 - Syntax check before committing: `/usr/local/bin/luac -p
-  Oversample/oversample_core.lua && /usr/local/bin/luac -p
-  Oversample/Oversample.lua`.
+  lib/*.lua lib/*/*.lua` (parses every module under `lib/`, not just the core
+  and entry point).
 - Run the test suites under **both** `lua` and `luajit` before pushing. CI runs
   Renoise's Lua 5.1 and LuaJIT; the local default `lua` is 5.5.1, so a green run
   there is NOT proof of Renoise compatibility. Lua 5.2+ syntax (e.g. `goto` /
   `::label::`) parses on 5.5 and LuaJIT 2.1 but fails on plain Lua 5.1, which CI
   also runs. Pin the push gate on `luajit test/oversample_core_test.lua` (and the
-  UI suite) passing, plus `luac -p` and `luacheck .`. `luajit` is installed
-  locally and is the Lua 5.1-compatible runtime to use.
+  UI and strict-globals load suites) passing, plus `luac -p` and `luacheck .`.
+  `luajit` is installed locally and is the Lua 5.1-compatible runtime to use.
 - Commit every meaningful change, ensuring that each commit represents a
   logical unit of work.
 - When fixing code that was added in a previous commit on the same branch,

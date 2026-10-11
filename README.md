@@ -99,7 +99,7 @@ needs and may still not work for you.**
 
 ## Testing & coverage
 
-The pure, Renoise-independent logic lives in `Oversample/oversample_core.lua` and
+The pure, Renoise-independent logic lives in `lib/oversample/core.lua` and
 is unit-tested with [luaunit][luaunit] in `test/oversample_core_test.lua`, which
 runs in CI via the Test workflow under [luacov][luacov]. Core coverage is reported
 to [Codecov][codecov].
@@ -110,16 +110,18 @@ placement. It exercises the actual dialog code but does not emulate native text
 metrics, clipping, rendering, or notifier timing. After UI changes, reload the
 tool in Renoise and visually check the dialog as well.
 
-Run both suites from the tool root after installing the rockspec dependencies:
+Run all three suites from the tool root after installing the rockspec dependencies:
 
 ```sh
 eval "$(luarocks path)"
 lua test/oversample_core_test.lua
 lua test/oversample_ui_test.lua
+lua test/oversample_load_test.lua
 ```
 
-CI runs both suites with Lua 5.1 and LuaJIT. UI stub tests are excluded from the
-coverage report, so the badge continues to reflect only the core module.
+CI runs all three suites with Lua 5.1 and LuaJIT. UI stub tests and the
+strict-globals load suite are excluded from the coverage report, so the badge
+continues to reflect only the core module.
 
   [renoise]: https://www.renoise.com/
   [luaunit]: https://github.com/bluebird75/luaUnit
