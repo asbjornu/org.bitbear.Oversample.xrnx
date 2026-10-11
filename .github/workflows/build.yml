@@ -2,11 +2,16 @@ name: Build
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Install Lua 5.1 and LuaJIT
       run: |
         sudo apt-get update
@@ -22,7 +27,9 @@ jobs:
   compile:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Install LuaJIT
       run: |
         sudo apt-get update
@@ -34,7 +41,9 @@ jobs:
   luacheck:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Install luacheck
       run: |
         sudo apt-get update
@@ -46,7 +55,9 @@ jobs:
   xml:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Install xmllint
       run: |
         sudo apt-get update
