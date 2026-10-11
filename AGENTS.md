@@ -82,8 +82,8 @@ remains available even when High Quality is Off.
 - **GPG-sign every commit**. Homebrew is installed and `gpg` is installed
   in Homebrew. Find it and use it to sign all commits.
 - Syntax check before committing: `/usr/local/bin/luac -p
-  lib/**/*.lua` (parses every module under `lib/`, not just the core and entry
-  point).
+  lib/*.lua lib/*/*.lua` (parses every module under `lib/`, not just the core
+  and entry point).
 - Run the test suites under **both** `lua` and `luajit` before pushing. CI runs
   Renoise's Lua 5.1 and LuaJIT; the local default `lua` is 5.5.1, so a green run
   there is NOT proof of Renoise compatibility. Lua 5.2+ syntax (e.g. `goto` /
