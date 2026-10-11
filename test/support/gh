@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Test double for the `gh` CLI, shared by the bats suites. Tests put this
+# directory first on PATH and point the GH_*_FILE variables at canned JSON.
+# Every invocation is appended to $GH_LOG; POST/PATCH bodies to $GH_BODIES.
+
+printf '%s\n' "$*" >>"${GH_LOG:-/dev/null}"
+
+if [ "${1:-}" = "aw" ]; then
+  printf '%s' "${GH_AW_OUT:-View workflow run: https://github.com/o/r/actions/runs/424242}"
+  exit 0
+fi
+[ "${1:-}" = "api" ] && shift
+
+method="GET"
+endpoint=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  a="${args[$i]}"
+  case "$a" in
+    -X)
+      method="${args[$((i + 1))]}"
+      i=$((i + 1))
+      continue
+      ;;
+    -*) continue ;;
+  esac
+  [ -z "$endpoint" ] && endpoint="$a"
+done
+
+if [ "$method" = "POST" ] || [ "$method" = "PATCH" ]; then
+  body="$(cat)"
+  [ -n "${GH_BODIES:-}" ] && printf '%s\n' "$body" >>"$GH_BODIES"
+fi
+
+file_or() {
+  local var="$1" fallback="$2"
+  if [ -n "${!var:-}" ] && [ -f "${!var}" ]; then
+    cat "${!var}"
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+case "$endpoint" in
+  user) file_or GH_USER_FILE '{"login":"maintainer"}' ;;
+  *"/actions/workflows/"*"/runs"*) file_or GH_RUNS_FILE '{"total_count":0}' ;;
+  *"/actions/runs/"*"/jobs"*) file_or GH_JOBS_FILE '{"jobs":[]}' ;;
+  *"/actions/runs/"*) file_or GH_RUN_FILE '{"conclusion":"none"}' ;;
+  *"/actions/workflows") file_or GH_WORKFLOWS_FILE '{"workflows":[]}' ;;
+  *"/issues/"*"/comments"*) 
+    case "$method" in
+      POST) file_or GH_POST_COMMENT_FILE '{"id":900}' ;;
+      PATCH) file_or GH_PATCH_COMMENT_FILE '{}' ;;
+      *) file_or GH_COMMENTS_FILE '[]' ;;
+    esac
+    ;;
+  *"/pulls/"*"/files"*) file_or GH_FILES_FILE '[]' ;;
+  *"/pulls/"*"/commits"*) file_or GH_COMMITS_FILE '[]' ;;
+  *"/pulls/"*"/reviews"*) file_or GH_REVIEWS_FILE '[]' ;;
+  *"/compare/"*) file_or GH_COMPARE_FILE '{}' ;;
+  *"/pulls/"*"/requested_reviewers"*) file_or GH_REQUEST_FILE '{}' ;;
+  *"/pulls?state=open"*) file_or GH_PULLS_FILE '[]' ;;
+  *"/pulls/"*) file_or GH_PULL_FILE '{}' ;;
+  *)
+    echo "fake gh: unhandled $method $endpoint" >&2
+    exit 1
+    ;;
+esac
