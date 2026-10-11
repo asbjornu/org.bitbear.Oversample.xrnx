@@ -1,6 +1,6 @@
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
 -- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
-local core = require("oversample/oversample_core")
+local core = require("oversample/core")
 local same_name_set = core.same_name_set
 
 -- All mutable runtime state lives in one injected table (see oversample/state.lua).

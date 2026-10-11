@@ -2,7 +2,7 @@
 -- Models visible-child sizing and property changes, not native Renoise rendering.
 package.path = "./?.lua;./lib/?.lua;" .. package.path
 local lu = require("luaunit")
-local core = require("oversample/oversample_core")
+local core = require("oversample/core")
 local cache_factory = require("oversample/cache")
 local renoise_stub = require("test/support/renoise_stub")
 

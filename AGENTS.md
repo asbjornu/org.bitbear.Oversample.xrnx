@@ -62,7 +62,7 @@ remains available even when High Quality is Off.
 - Other `renoise/3.x.x` branches are parallel worktrees.
   `backup/before-cleanup` preserves pre-cleanup history.
 - Key files: `lib/oversample/oversample.lua` (UI + glue, thin coordinator),
-  `lib/oversample/oversample_core.lua` (logic/constants),
+  `lib/oversample/core.lua` (logic/constants),
   `lib/oversample/state.lua` (single owner of mutable UI/cache state),
   `lib/oversample/cache.lua` (tool/preferences persistence and merge/prune
   helpers), `lib/oversample/devices.lua` (song scanning, live instances,
