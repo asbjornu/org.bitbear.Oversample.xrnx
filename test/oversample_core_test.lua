@@ -2,7 +2,7 @@
 test/oversample_core_test.lua
 
 Unit tests for the pure, Renoise-independent logic in
-Oversample/oversample_core.lua. Run with any Lua interpreter:
+oversample/oversample_core.lua. Run with any Lua interpreter:
 
     lua test/oversample_core_test.lua
 
@@ -19,11 +19,12 @@ local test_dir = script_dir()
 local project_root = test_dir:gsub("test/", "")
 
 package.path = project_root .. "?.lua;" ..
+               project_root .. "lib/?.lua;" ..
                test_dir .. "?.lua;" ..
                package.path
 
 local lu = require("luaunit")
-local core = require("Oversample/oversample_core")
+local core = require("oversample/oversample_core")
 
 
 --------------------------------------------------------------------------------

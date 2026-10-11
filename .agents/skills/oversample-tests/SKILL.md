@@ -54,5 +54,5 @@ luajit test/oversample_load_test.lua
 
 ## Lua syntax check (also a commit gate)
 ```sh
-/usr/local/bin/luac -p Oversample/*.lua
+/usr/local/bin/luac -p lib/*.lua lib/oversample/*.lua
 ```

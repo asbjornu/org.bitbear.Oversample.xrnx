@@ -7,7 +7,7 @@ compatibility: opencode
 
 # Renoise ViewBuilder layout rules (learned the hard way)
 
-Apply these whenever you touch `Oversample/oversample.lua` dialog construction
+Apply these whenever you touch `lib/oversample/oversample.lua` dialog construction
 or `vb:` control sizing.
 
 ## Aligned columns = fixed widths

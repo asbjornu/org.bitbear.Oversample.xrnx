@@ -22,6 +22,7 @@ local test_dir = script_dir()
 local project_root = test_dir:gsub("test/", "")
 
 package.path = project_root .. "?.lua;" ..
+               project_root .. "lib/?.lua;" ..
                test_dir .. "?.lua;" ..
                package.path
 
@@ -62,9 +63,9 @@ end
 
 -- Exercise the load once, up front, so the assertions below only inspect the
 -- captured outcome (no metatable is active while luaunit runs).
-package.loaded["Oversample/oversample"] = nil
+package.loaded["oversample/oversample"] = nil
 local loaded_ok, loaded_module = with_strict_globals(function()
-   return require("Oversample/oversample")
+   return require("oversample/oversample")
 end)
 
 local leaked = {}

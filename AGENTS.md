@@ -61,23 +61,25 @@ remains available even when High Quality is Off.
   check the worktree.
 - Other `renoise/3.x.x` branches are parallel worktrees.
   `backup/before-cleanup` preserves pre-cleanup history.
-- Key files: `Oversample/oversample.lua` (UI + glue, thin coordinator),
-  `Oversample/oversample_core.lua` (logic/constants),
-  `Oversample/state.lua` (single owner of mutable UI/cache state),
-  `Oversample/cache.lua` (tool/preferences persistence and merge/prune
-  helpers), `Oversample/devices.lua` (song scanning, live instances,
-  parameter enumeration, device/preset notifiers), `Oversample/osig.lua`
+- Key files: `lib/oversample/oversample.lua` (UI + glue, thin coordinator),
+  `lib/oversample/oversample_core.lua` (logic/constants),
+  `lib/oversample/state.lua` (single owner of mutable UI/cache state),
+  `lib/oversample/cache.lua` (tool/preferences persistence and merge/prune
+  helpers), `lib/oversample/devices.lua` (song scanning, live instances,
+  parameter enumeration, device/preset notifiers), `lib/oversample/osig.lua`
   (osig labels/order and VST3 state-chunk patching),
-  `Oversample/ProcessSlicer.lua`, `main.lua` (menu entry `Main
-  Menu:Tools:Oversample`).
+  `lib/ProcessSlicer.lua`, `main.lua` (menu entry `Main
+  Menu:Tools:Oversample`). Modules live under `lib/`, which `main.lua` puts on
+  `package.path` via `renoise.tool().bundle_path` (so requires are
+  `require("oversample/state")`, not `lib/oversample/state`).
 
 ## Commit / git rules
 
 - **GPG-sign every commit**. Homebrew is installed and `gpg` is installed
   in Homebrew. Find it and use it to sign all commits.
 - Syntax check before committing: `/usr/local/bin/luac -p
-  Oversample/*.lua` (parses every module under `Oversample/`, not just the
-  core and entry point).
+  lib/**/*.lua` (parses every module under `lib/`, not just the core and entry
+  point).
 - Run the test suites under **both** `lua` and `luajit` before pushing. CI runs
   Renoise's Lua 5.1 and LuaJIT; the local default `lua` is 5.5.1, so a green run
   there is NOT proof of Renoise compatibility. Lua 5.2+ syntax (e.g. `goto` /

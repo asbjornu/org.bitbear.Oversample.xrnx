@@ -1,9 +1,9 @@
 -- Run from the tool root: lua test/oversample_ui_test.lua (requires luaunit).
 -- Models visible-child sizing and property changes, not native Renoise rendering.
-package.path = "./?.lua;" .. package.path
+package.path = "./?.lua;./lib/?.lua;" .. package.path
 local lu = require("luaunit")
-local core = require("Oversample/oversample_core")
-local cache_factory = require("Oversample/cache")
+local core = require("oversample/oversample_core")
+local cache_factory = require("oversample/cache")
 local renoise_stub = require("test/support/renoise_stub")
 
 -- The tool module's functions, refreshed by each setUp via dofile.
@@ -26,7 +26,7 @@ function TestDialogLayout:setUp()
     renoise = host.renoise
     -- Background scans stay pending; each test supplies only the device state it needs.
     ProcessSlicer = function() return {start = function() end} end
-    local module = dofile("Oversample/oversample.lua")
+    local module = dofile("lib/oversample/oversample.lua")
     oversample = module.oversample
     destroy = module.destroy
     create_settings_row = module.create_settings_row
@@ -611,14 +611,14 @@ function TestDialogLayout:test_require_returns_module_api_without_global_leak()
     -- main.lua consumes the tool through require(); lock in that boundary so a
     -- refactor cannot silently rename the entry points or leak the implementation
     -- into the global environment.
-    package.loaded["Oversample/oversample"] = nil
-    local module = require("Oversample/oversample")
+    package.loaded["oversample/oversample"] = nil
+    local module = require("oversample/oversample")
 
     lu.assertIsTable(module)
     lu.assertEquals(type(module.oversample_init), "function")
     lu.assertEquals(type(module.oversample), "function")
     -- require() caches the module table.
-    lu.assertEquals(require("Oversample/oversample"), module)
+    lu.assertEquals(require("oversample/oversample"), module)
 
     -- The white-box surface the UI bootstrap relies on stays exported.
     for _, name in ipairs({

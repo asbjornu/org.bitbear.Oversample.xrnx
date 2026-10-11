@@ -1,5 +1,5 @@
 --[[============================================================================
-Oversample/oversample_core.lua
+lib/oversample/oversample_core.lua
 
 Pure, Renoise-independent data-manipulation and helper logic for the Oversample
 tool, extracted from oversample.lua so it can be unit-tested in isolation with a

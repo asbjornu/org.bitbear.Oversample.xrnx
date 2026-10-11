@@ -99,7 +99,7 @@ needs and may still not work for you.**
 
 ## Testing & coverage
 
-The pure, Renoise-independent logic lives in `Oversample/oversample_core.lua` and
+The pure, Renoise-independent logic lives in `lib/oversample/oversample_core.lua` and
 is unit-tested with [luaunit][luaunit] in `test/oversample_core_test.lua`, which
 runs in CI via the Test workflow under [luacov][luacov]. Core coverage is reported
 to [Codecov][codecov].

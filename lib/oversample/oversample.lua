@@ -1,15 +1,15 @@
 -- Pure, Renoise-independent helpers live in the shared core module so they can be
 -- unit-tested in isolation. Alias them here to keep the call sites below unchanged.
-local core = require("Oversample/oversample_core")
+local core = require("oversample/oversample_core")
 local match_parameter = core.match_parameter
 local known_primary = core.known_primary
 local known_secondary = core.known_secondary
 local nearest_choice_index = core.nearest_choice_index
 local same_name_set = core.same_name_set
 
--- All mutable runtime state lives in one injected table (see Oversample/state.lua).
-local state = require("Oversample/state")(renoise)
-local cache = require("Oversample/cache")({ renoise = renoise, core = core, state = state })
+-- All mutable runtime state lives in one injected table (see oversample/state.lua).
+local state = require("oversample/state")(renoise)
+local cache = require("oversample/cache")({ renoise = renoise, core = core, state = state })
 local list_count = cache.list_count
 
 -- Every function below is a module-local. These forward declarations exist only
@@ -30,9 +30,9 @@ local CONTENT_HEIGHT = renoise.ViewBuilder.DEFAULT_CONTROL_HEIGHT
 local COLUMN_WIDTH = 16 * CONTENT_HEIGHT
 local HALF_COLUMN_WIDTH = 8 * CONTENT_HEIGHT
 
--- Song scanning/instances live in Oversample/devices.lua; the UI callbacks are
+-- Song scanning/instances live in oversample/devices.lua; the UI callbacks are
 -- injected as closures over the coordinator's forward-declared locals.
-local devices = require("Oversample/devices")({
+local devices = require("oversample/devices")({
     renoise = renoise,
     core = core,
     state = state,
@@ -48,8 +48,8 @@ local devices = require("Oversample/devices")({
     },
 })
 
--- Oversampling-signature labels + VST3 chunk patching live in Oversample/osig.lua.
-local osig = require("Oversample/osig")({
+-- Oversampling-signature labels + VST3 chunk patching live in oversample/osig.lua.
+local osig = require("oversample/osig")({
     renoise = renoise,
     core = core,
     state = state,
@@ -178,7 +178,7 @@ local function mark_parameter_scan_finished()
 end
 
 -- The persistent parameter/device/oversampling-signature cache lives in
--- Oversample/cache.lua; the coordinator only calls its load/save/prune API.
+-- oversample/cache.lua; the coordinator only calls its load/save/prune API.
 
 
 on_song_devices_changed = function()
