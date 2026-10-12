@@ -121,15 +121,22 @@ The automated PR Fixer already resolves the Copilot threads it fixes
 
 ## PR fixer squash
 
-`pr-fix-squash.yml` is stateless. On every `synchronize` event for a
-same-repository pull request opened by the configured author
-(`github.event.pull_request.user.login`, not the pusher) it gates on a
-`fixup!` commit in `merge-base..HEAD`; if one exists it runs
-`git rebase -i --autosquash --rebase-merges <merge-base>` (folding every
-`fixup!` regardless of author) and pushes with `--force-with-lease`. It
-reads and writes no marker or anchor comment, so there is no shared state
-to race on, and `--force-with-lease` rejects the push if the remote head
-moved after checkout. With no `fixup!` present it is a no-op.
+`pr-fix-squash.yml` folds the fixer's `fixup!` commits and force-pushes. On
+every `synchronize` event for a same-repository pull request opened by the
+configured author (`github.event.pull_request.user.login`, not the pusher) it
+resolves a base anchor — its own `aw-pr-fix-squash-anchor` marker or the
+orchestrator's `aw-pr-fix-state` dispatch head — and compares that anchor to
+`HEAD` (via the compare API). When an active fixer dispatch covers the head and
+the range holds only fixer-authored commits including a `fixup!`, it runs
+`git rebase -i --rebase-merges <merge-base>` with
+`GIT_SEQUENCE_EDITOR=scripts/seq-editor.sh`, which moves each `fixup!` next to
+its target (by its `aw-fixup-target` trailer, else a subject match), and pushes
+with `--force-with-lease`. After a verified push it records an
+`aw-pr-fix-squash-anchor` comment for the new head. Unlike the earlier
+merge-base-only flow, the squash reads and writes marker comments, so runs
+share state and the workflow queues rather than cancels; `--force-with-lease`
+still rejects the push if the remote head moved after checkout. With no active
+fixer dispatch for the head it is a no-op.
 
 The fixer creates the `fixup!` commits (`pr-fix.md`); the branch is
 fixer-managed between rounds, so a human who pushes commits to it may

@@ -1,5 +1,9 @@
 name: PR Fixer Orchestrator
 
+# Dispatches the gh-aw PR Fixer for new Copilot reviews, one PR per cycle, and
+# surfaces terminal fixer failures as PR comments. The state machine lives in
+# scripts/pr-fix-orchestrator.sh (tested with Bats).
+
 on:
   schedule:
     # Every 5 minutes: GitHub Actions' minimum practical schedule granularity.
@@ -24,17 +28,17 @@ jobs:
     steps:
       - name: Check out the repository (for gh-aw resolution)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Ensure the gh-aw extension
         run: gh extension install github/gh-aw >/dev/null 2>&1 || true
 
       # GH_TOKEN is the maintainer PAT (GH_AW_PUSH_TOKEN) for reads and marker
       # comments, so the marker author matches `gh api user`. The workflow
-      # dispatch below deliberately overrides GH_TOKEN with the job's
-      # GITHUB_TOKEN (passed in as GH_AW_DISPATCH_TOKEN, since github.token has
-      # no shell variable of its own); that token carries actions: write, while
-      # a fine-grained PAT without Actions: write makes workflow_dispatch fail
-      # with HTTP 403.
+      # dispatch in the script deliberately overrides GH_TOKEN with the job's
+      # GITHUB_TOKEN (passed in as GH_AW_DISPATCH_TOKEN), because a fine-grained
+      # PAT without Actions: write makes workflow_dispatch fail with HTTP 403.
       - name: Dispatch the fixer for new Copilot reviews
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
@@ -43,252 +47,4 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
           MAX_ROUNDS: ${{ vars.PR_FIX_MAX_ROUNDS || '6' }}
-        run: |
-          set -euo pipefail
-          token_user=$(gh api user --jq '.login')
-          wf_id=$(gh api "repos/$REPO/actions/workflows" \
-            --jq '.workflows[] | select(.path == ".github/workflows/pr-fix.lock.yml") | .id')
-          if [ -z "$wf_id" ]; then
-            echo "pr-fix workflow not on the default branch yet; nothing to do"
-            exit 0
-          fi
-
-          inprogress=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=in_progress&per_page=1" --jq '.total_count')
-          queued=$(gh api "repos/$REPO/actions/workflows/$wf_id/runs?status=queued&per_page=1" --jq '.total_count')
-          if [ "${inprogress:-0}" != "0" ] || [ "${queued:-0}" != "0" ]; then
-            echo "A PR Fixer run is already pending; skipping this cycle"
-            exit 0
-          fi
-
-          # workflow_dispatch runs are not subject to the bot-approval gate, so
-          # there is no parked-run bypass here. A workflow_dispatch run records
-          # the default branch as its head_branch and its inputs are not exposed
-          # by the API, so a parked run cannot be reliably associated with a
-          # target PR; if one ever appears it is left for a human.
-
-          # Surface a failed fixer run as a comment on the pull request it was
-          # dispatched for, instead of leaving it only in a separate [aw]
-          # failure issue. Returns non-zero if the comment could not be
-          # posted; the caller then leaves the marker pointing at the failed
-          # run so the report is retried next cycle instead of being lost.
-          report_fixer_failure() {
-            local pr_number="$1" run_id="$2" conclusion="$3"
-            local run_url="$SERVER_URL/$REPO/actions/runs/$run_id"
-            local failure_marker="<!-- aw-pr-fix-failure run=$run_id -->"
-            local failed_jobs body
-            # Deduplicate by run id: a failed run whose report was already
-            # posted is not reported again on the next cycle, even when no
-            # new state marker is written (e.g. the round limit is reached).
-            # Only trust a marker authored by the maintainer token, like the
-            # aw-pr-fix-state marker check. A failed lookup is itself a
-            # failure: report it so the caller retries next cycle rather than
-            # posting a duplicate comment.
-            local existing
-            if ! existing=$(gh api --paginate "repos/$REPO/issues/$pr_number/comments?per_page=100" \
-                 --jq '.[] | select(.body | contains("<!-- aw-pr-fix-failure run='"$run_id"' -->")) | .user.login'); then
-              echo "PR #$pr_number: could not check for an existing failure marker for run $run_id" >&2
-              return 1
-            fi
-            if printf '%s\n' "$existing" | grep -Fqx "$token_user"; then
-              echo "PR #$pr_number: run $run_id failure already reported; skipping" >&2
-              return 0
-            fi
-            # A read error must not be mistaken for "no failed jobs": the
-            # report is deduplicated by run id, so a transient jobs-lookup
-            # failure would permanently omit the failed job names. Fail the
-            # report instead and let the caller retry next cycle. A missing
-            # (deleted/unavailable) run has no jobs endpoint to read.
-            # Only jobs that actually failed are listed: a job whose
-            # conclusion is "cancelled", "skipped", or "neutral" did not
-            # fail, even when the run as a whole did.
-            failed_jobs=""
-            if [ "$conclusion" != "missing" ]; then
-              if ! failed_jobs=$(gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
-                --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "- **\(.name)** (\(.conclusion))"] | join("\n")' \
-                2>/dev/null); then
-                echo "PR #$pr_number: could not list failed jobs for run $run_id" >&2
-                return 1
-              fi
-            fi
-            body="🤖 PR Fixer run failed (\`$conclusion\`) — [view logs]($run_url)."
-            if [ -n "$failed_jobs" ]; then
-              body="$body
-
-          Failed jobs:
-          $failed_jobs"
-            fi
-            body="$body
-
-          The orchestrator re-dispatches this review for another round while the configured round limit allows; once no rounds remain, a human needs to investigate.
-
-          $failure_marker"
-            if ! gh api -X POST "repos/$REPO/issues/$pr_number/comments" -f body="$body" >/dev/null; then
-              echo "PR #$pr_number: failed to post failure comment for run $run_id" >&2
-              return 1
-            fi
-          }
-
-          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
-            --jq '.[] | select(.draft == false and (.head.repo.full_name == .base.repo.full_name)) | "\(.user.login)\t\(.number)"' |
-          while read -r author pr; do
-            if [ -z "$pr" ] || [ "$author" != "$AUTHOR" ]; then
-              continue
-            fi
-            head=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
-
-            # Only trust a marker written by a maintainer, so an untrusted
-            # commenter cannot forge state and suppress the fixer. Read it
-            # before the current-review gate so a failed run is still reported
-            # when the head moved on and no new Copilot review exists yet.
-            prev=$(gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" \
-              --jq '.[] | select(.body | contains("<!-- aw-pr-fix-state")) | "\(.created_at)\t\(.id)\t\(.user.login)\t\(.body)"' |
-              sort | awk -F'\t' -v who="$token_user" '$3 == who { out = $0 } END { if (out != "") print out }')
-            prev_review=$(printf '%s' "$prev" | sed -n 's/.*review=\([0-9][0-9]*\).*/\1/p')
-            prev_round=$(printf '%s' "$prev" | sed -n 's/.*round=\([0-9][0-9]*\).*/\1/p')
-            prev_run=$(printf '%s' "$prev" | sed -n 's/.*run=\([0-9][0-9]*\).*/\1/p')
-            prev_comment=$(printf '%s' "$prev" | awk -F'\t' '{ print $2 }')
-
-            # Report a terminal failure of the previously dispatched run
-            # regardless of whether a review exists on the current head or a
-            # newer review has superseded the run's review. report_fixer_failure
-            # dedupes by run id, so re-checking every cycle is safe.
-            prev_concl=""
-            if [ -n "$prev_run" ] && [ "$prev_run" != "none" ]; then
-              # A read error must not be mistaken for a missing or failed run.
-              # A 404 means the run is genuinely gone (report as `missing` and
-              # re-dispatch below); any other failure is transient, so skip the
-              # PR and retry next cycle rather than posting a bogus failure
-              # comment.
-              if ! prev_concl=$(gh api "repos/$REPO/actions/runs/$prev_run" --jq '.conclusion // "none"' 2>&1); then
-                if printf '%s' "$prev_concl" | grep -q "HTTP 404"; then
-                  prev_concl="missing"
-                else
-                  echo "PR #$pr: could not read run $prev_run; will retry next cycle"
-                  continue
-                fi
-              fi
-              case "$prev_concl" in
-                failure|cancelled|timed_out|startup_failure|stale|missing)
-                  if ! report_fixer_failure "$pr" "$prev_run" "$prev_concl"; then
-                    echo "PR #$pr: could not report run $prev_run failure; will retry next cycle"
-                    continue
-                  fi
-                  ;;
-              esac
-            fi
-
-            review=$(gh api --paginate "repos/$REPO/pulls/$pr/reviews?per_page=100" \
-              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-reviewer" or .user.login == "Copilot" or .user.login == "copilot") | "\(.submitted_at)\t\(.commit_id)\t\(.state | ascii_upcase)\t\(.id)"' |
-              sort | awk -F'\t' -v h="$head" '$2 == h { st = $3; id = $4 } END { if (st == "COMMENTED") print id }')
-            if [ -z "$review" ]; then
-              echo "PR #$pr: no Copilot review on the current head"
-              continue
-            fi
-
-            if [ "$prev_review" = "$review" ]; then
-              if [ -z "$prev_run" ] || [ "$prev_run" = "none" ]; then
-                echo "PR #$pr: review $review has no observed run; re-dispatching"
-              else
-                case "$prev_concl" in
-                  failure|cancelled|timed_out|startup_failure|stale|missing)
-                    echo "PR #$pr: previous run $prev_run concluded $prev_concl; re-dispatching review $review"
-                    ;;
-                  *)
-                    echo "PR #$pr: review $review already dispatched ($prev_concl)"
-                    continue
-                    ;;
-                esac
-              fi
-            fi
-            round=$(( ${prev_round:-0} + 1 ))
-            if [ "$round" -gt "$MAX_ROUNDS" ]; then
-              echo "PR #$pr: reached $MAX_ROUNDS rounds; leaving the rest to a human"
-              continue
-            fi
-
-            head_now=$(gh api "repos/$REPO/pulls/$pr" --jq '.head.sha')
-            if [ "$head_now" != "$head" ]; then
-              echo "PR #$pr: head moved from $head to $head_now; not dispatching (will re-evaluate)"
-              continue
-            fi
-
-            # Write a pending marker before dispatch. The run id is filled in
-            # once the run appears.
-            review_url="$SERVER_URL/$REPO/pull/$pr#pullrequestreview-$review"
-            # Keep the machine marker and the human summary on one line: the
-            # aw-pr-fix-state body is split by line before this workflow's
-            # field/line readers parse it, so a newline would corrupt marker ID
-            # extraction. The marker goes after
-            # the summary, not before it: a leading "<!-- ... -->" makes
-            # CommonMark treat the entire line as a raw-HTML block, so the
-            # summary's Markdown would render as literal text instead.
-            pending="🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — dispatching a run for head \`${head:0:7}\`… <!-- aw-pr-fix-state review=$review pr=$pr round=$round run=none head=$head -->"
-            if [ -n "$prev_comment" ]; then
-              marker_id=$prev_comment
-              gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" -f body="$pending" >/dev/null
-            else
-              marker_id=$(gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$pending" --jq '.id')
-            fi
-
-            echo "PR #$pr: dispatching fixer for review $review (round $round)"
-            aw_context=$(printf '{"item_type":"pull_request","item_number":%d}' "$pr")
-            # Dispatch with the job's GitHub token, which the job grants
-            # actions: write. GH_AW_PUSH_TOKEN is a PAT that pushes and writes
-            # review markers but may not carry Actions: write, and a dispatch
-            # attempt with it fails with HTTP 403 "Resource not accessible by
-            # personal access token". `${{ github.token }}` has no shell
-            # variable of its own, so it is passed in via GH_AW_DISPATCH_TOKEN.
-            dispatch_out=""
-            if ! dispatch_out=$(GH_TOKEN="$GH_AW_DISPATCH_TOKEN" gh aw run pr-fix --repo "$REPO" --raw-field "aw_context=$aw_context" 2>&1); then
-              echo "Dispatch failed for PR #$pr; marker stays pending (will retry)"
-              printf '%s\n' "$dispatch_out" >&2
-              continue
-            fi
-            printf '%s\n' "$dispatch_out"
-            # gh aw run reports the run it just triggered (the gh workflow run
-            # URL, or its "View workflow run:" line), which ties the run to
-            # this dispatch. The workflow-wide runs endpoint is not scoped to a
-            # PR, so scanning it for the newest id could adopt a run dispatched
-            # for another PR or a manual run; prefer the reported id and leave
-            # the marker at run=none (retried next cycle) when it is absent.
-            run_id=$(printf '%s\n' "$dispatch_out" | grep -oE '/actions/runs/[0-9]+' | head -n 1 | grep -oE '[0-9]+' || true)
-            if [ -z "$run_id" ]; then
-              echo "PR #$pr: dispatched run not identified; marker stays pending (will retry)"
-              continue
-            fi
-            # Visible heads-up so watchers know the fixer picked up this review.
-            # Link via the server URL so this also works on GitHub Enterprise.
-            run_url="$SERVER_URL/$REPO/actions/runs/$run_id"
-            outcome="🤖 PR Fixer is working on Copilot review [\`$review\`]($review_url) (round $round, fixes by [@$token_user]($SERVER_URL/$token_user)) — [run \\#$run_id]($run_url) for head \`${head:0:7}\`. <!-- aw-pr-fix-state review=$review pr=$pr round=$round run=$run_id head=$head -->"
-            # PATCH (never POST) keeps the marker and this summary in one
-            # comment across cycles; a POST would duplicate it. The body stays
-            # single-line (summary first, marker last, as above) so the marker
-            # field/line readers here can split it by line and extract fields.
-            # Do not swallow a failed write: if the marker is left at
-            # run=none, the next cycle loses the failure report and re-dispatches
-            # the same review. Retry, then fall back to a fresh state comment so
-            # the run id is persisted even when the PATCH cannot be applied.
-            marker_updated=""
-            for _ in 1 2 3; do
-              if gh api -X PATCH "repos/$REPO/issues/comments/$marker_id" \
-                -f body="$outcome" >/dev/null; then
-                marker_updated=1
-                break
-              fi
-              sleep 3
-            done
-            if [ -z "$marker_updated" ]; then
-              echo "PR #$pr: could not update marker $marker_id for run $run_id; posting fallback state comment" >&2
-              if ! marker_id=$(gh api -X POST "repos/$REPO/issues/$pr/comments" \
-                -f body="$outcome" --jq '.id'); then
-                # Both writes failed, so the marker is left at run=none. Stop
-                # here rather than dispatching another PR; the next cycle will
-                # re-evaluate the pending marker and re-dispatch this review.
-                echo "PR #$pr: could not persist outcome for run $run_id; ending this cycle (will retry next cycle)" >&2
-                break
-              fi
-            fi
-
-            # One dispatch per cycle keeps run-to-PR association unambiguous.
-            break
-          done
+        run: bash scripts/pr-fix-orchestrator.sh
