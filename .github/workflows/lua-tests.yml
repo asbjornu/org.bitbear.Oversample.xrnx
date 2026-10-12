@@ -2,11 +2,16 @@ name: Test
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Install Lua 5.1 and luarocks
       run: |
         sudo apt-get update
@@ -27,7 +32,7 @@ jobs:
         luajit test/oversample_core_test.lua
         luajit test/oversample_ui_test.lua
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v7
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         files: luacov.report.out
         token: ${{ secrets.CODECOV_TOKEN }}

@@ -1,5 +1,9 @@
 name: PR Fixer Squash
 
+# Folds the fixer's fixup! commits on a PR branch and force-pushes, then records
+# a squash anchor. Logic lives in scripts/pr_fix_squash.rb and its sequence
+# editor in scripts/seq_editor.rb (unit-tested with minitest).
+
 on:
   pull_request:
     types: [synchronize]
@@ -9,9 +13,11 @@ permissions:
 
 concurrency:
   group: fixer-squash-${{ github.event.pull_request.number }}
-  # Queue instead of cancel so a running squash is never interrupted. A stale
-  # queued run cannot clobber a newer push: --force-with-lease rejects its push
-  # when the remote head moved after this run checked out.
+  # Queue instead of cancel: a run cancelled between writing the anchor and the
+  # force-push would strand the anchor at an unpublished SHA, and later runs for
+  # the same review would then fall back to the dispatch head.
+  # --force-with-lease still stops a stale queued run from clobbering a newer
+  # push.
   cancel-in-progress: false
 
 jobs:
@@ -23,12 +29,27 @@ jobs:
     steps:
       - name: Check out the pull request branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # zizmor: ignore[artipacked] the fixer pushes the squashed branch, so the
+        # checkout credential must persist.
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GH_AW_PUSH_TOKEN }}
           fetch-depth: 0
 
-      - name: Fold fixup! commits into their targets and force-push
+      # The squash runs with the push credential and GH_AW_PUSH_TOKEN, so its
+      # implementation must not come from the pull request: a fixer change to
+      # scripts/ would become arbitrary code execution with a repository-writing
+      # PAT. Keep the PR checkout as the Git working tree, but run the code from
+      # the base branch. It is absent until these scripts are merged, so fall
+      # back to the PR copy for that bootstrap only.
+      - name: Check out the trusted CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: .trusted
+          persist-credentials: false
+
+      - name: Autosquash fixer-authored fixup! commits and force-push
         env:
           GH_TOKEN: ${{ secrets.GH_AW_PUSH_TOKEN }}
           REPO: ${{ github.repository }}
@@ -36,116 +57,10 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          base=$(git merge-base "origin/$BASE_REF" HEAD)
-          # The remote head this run checked out; used below to tell a lease
-          # rejection (a newer push moved it) from a push that never landed.
-          orig_head=$(git rev-parse HEAD)
-
-          # Stateless: the set of commits to fold is defined solely by the
-          # fixup! prefix, from the branch merge-base. No marker or anchor
-          # comment is read or written, so there is no shared coordination
-          # state to race on. The fixer only targets commits strictly inside
-          # base..HEAD (pr-fix.md), so every fixup! has an in-range target.
-          # grep must consume the whole stream (not -q): with pipefail, -q would
-          # exit on the first match and SIGPIPE git log, faking a "no fixup!"
-          # no-op on a large range.
-          if ! git log --format=%s "$base..HEAD" | grep '^fixup! ' >/dev/null; then
-            echo "No fixup! commits to fold; nothing to do"
-            exit 0
+          script=scripts/pr_fix_squash.rb
+          if [ -f ".trusted/$script" ]; then
+            script=".trusted/$script"
+          else
+            echo "Trusted CI scripts are not on the base branch yet; using the pull request copy" >&2
           fi
-
-          # --autosquash folds every `fixup! <subject>` next to its target,
-          # regardless of authorship. GIT_SEQUENCE_EDITOR=: accepts the
-          # generated todo unchanged, so the rebase is non-interactive.
-          #
-          # On conflict the head is unchanged, so no synchronize fires: the
-          # review-request workflow defers to this squash and the orchestrator
-          # needs a review on the current head, so both would wait forever.
-          # Abort, request a review for the current head so the loop recovers,
-          # and still fail the step visibly.
-          if ! GIT_SEQUENCE_EDITOR=: GIT_EDITOR=: \
-               git rebase -i --autosquash --rebase-merges "$base"; then
-            git rebase --abort >/dev/null 2>&1 || true
-            echo "Squash rebase failed; requesting a review to recover" >&2
-            # A failed rebase fires no synchronize, and the review-request
-            # workflow has already deferred to this squash, so swallowing a
-            # transient request failure would stall the fixer loop. Retry, then
-            # report exhaustion explicitly instead of discarding the write.
-            requested=""
-            for _ in 1 2 3; do
-              if gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
-                   -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1; then
-                requested=1
-                break
-              fi
-              sleep 3
-            done
-            if [ -z "$requested" ]; then
-              echo "Could not request a review after retries; the fixer loop may stall" >&2
-            fi
-            exit 1
-          fi
-
-          # --autosquash leaves an unmatched fixup! as a normal pick, so a
-          # human-authored fixup whose target is outside base..HEAD survives.
-          # Publishing it would make the next synchronize run find the same
-          # fixup and force-push again forever. Never push a surviving fixup!;
-          # recover like a conflicted rebase instead.
-          if git log --format=%s "$base..HEAD" | grep '^fixup! ' >/dev/null; then
-            echo "Unmatched fixup! commit survived the rebase; refusing to push" >&2
-            requested=""
-            for _ in 1 2 3; do
-              if gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
-                   -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1; then
-                requested=1
-                break
-              fi
-              sleep 3
-            done
-            if [ -z "$requested" ]; then
-              echo "Could not request a review after retries; the fixer loop may stall" >&2
-            fi
-            exit 1
-          fi
-
-          # --force-with-lease is the safety net: it rejects the push if the
-          # remote head moved after checkout, so a push that landed during the
-          # rebase is never clobbered.
-          new_head=$(git rev-parse HEAD)
-          if ! git push --force-with-lease origin "HEAD:$HEAD_REF"; then
-            # A failed push fires no synchronize, and the review-request
-            # workflow has already deferred to this squash, so a swallowed
-            # failure would stall the fixer loop. Distinguish a lease rejection
-            # (a newer push moved the remote head, whose own synchronize drives
-            # the loop) from other failures, where the remote is unchanged and a
-            # recovery review request is required.
-            echo "Force-push failed; checking the remote head" >&2
-            remote_head=$(git ls-remote origin "refs/heads/$HEAD_REF" 2>/dev/null | cut -f1 || true)
-            if [ "$remote_head" = "$new_head" ]; then
-              # The ref was updated despite the report; treat it as success.
-              echo "Remote already at $new_head; nothing more to do"
-              exit 0
-            fi
-            if [ -n "$remote_head" ] && [ "$remote_head" != "$orig_head" ]; then
-              echo "Remote head moved to ${remote_head:0:12}; a newer push drives the loop" >&2
-              exit 0
-            fi
-            echo "Remote head unchanged; requesting a review to recover" >&2
-            requested=""
-            for _ in 1 2 3; do
-              if gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
-                   -f 'reviewers[]=copilot-pull-request-reviewer[bot]' >/dev/null 2>&1; then
-                requested=1
-                break
-              fi
-              sleep 3
-            done
-            if [ -z "$requested" ]; then
-              echo "Could not request a review after retries; the fixer loop may stall" >&2
-            fi
-            exit 1
-          fi
-          echo "Squashed and force-pushed $HEAD_REF"
+          ruby "$script"
