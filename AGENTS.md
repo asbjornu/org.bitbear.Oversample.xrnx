@@ -121,15 +121,17 @@ The automated PR Fixer already resolves the Copilot threads it fixes
 
 ## PR fixer squash
 
-`pr-fix-squash.yml` is stateless. On every `synchronize` event for a
-same-repository pull request opened by the configured author
-(`github.event.pull_request.user.login`, not the pusher) it gates on a
-`fixup!` commit in `merge-base..HEAD`; if one exists it runs
-`git rebase -i --autosquash --rebase-merges <merge-base>` (folding every
-`fixup!` regardless of author) and pushes with `--force-with-lease`. It
-reads and writes no marker or anchor comment, so there is no shared state
-to race on, and `--force-with-lease` rejects the push if the remote head
-moved after checkout. With no `fixup!` present it is a no-op.
+`pr-fix-squash.yml` is stateful: it coordinates with the orchestrator through
+the same sticky comments. On every `synchronize` event for a same-repository
+pull request opened by the configured author
+(`github.event.pull_request.user.login`, not the pusher) it reads the latest
+fixer dispatch state marker and squash anchor marker and picks an anchor for
+the round: this workflow's own anchor when it is still an ancestor of HEAD,
+otherwise the orchestrator's dispatch head. It folds the fixer-authored
+`fixup!` commits between that anchor and HEAD, pushes with
+`--force-with-lease`, and once the remote ref equals the rewritten head it
+records a new anchor comment so later runs know which head was already folded.
+With no active dispatch or no fixer `fixup!` commits it is a no-op.
 
 The fixer creates the `fixup!` commits (`pr-fix.md`); the branch is
 fixer-managed between rounds, so a human who pushes commits to it may
