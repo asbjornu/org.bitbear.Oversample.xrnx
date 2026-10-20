@@ -5,8 +5,15 @@ Written by Bitbear
 https://bitbear.org/
 ============================================================================]]--
 
-local Oversample = require "Oversample/Oversample"
-require "Oversample/ProcessSlicer"
+-- Put the bundle root and lib/ on the Lua module path so the tool's own modules
+-- (under lib/) and vendored files load. `bundle_path` is the installed tool dir.
+local tool_bundle = renoise.tool().bundle_path
+package.path = tool_bundle .. "/?.lua;"
+            .. tool_bundle .. "/lib/?.lua;"
+            .. package.path
+
+local Oversample = require "oversample/oversample"
+require "ProcessSlicer"
 
 --------------------------------------------------------------------------------
 -- Preferences
