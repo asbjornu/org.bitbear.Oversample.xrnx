@@ -31,7 +31,8 @@ module Ci
 
     def rev_parse(ref)
       @events << [:rev_parse, ref]
-      @rev_parse.fetch(ref, "sha-#{ref}")
+      value = @rev_parse.fetch(ref, "sha-#{ref}")
+      value.is_a?(Array) ? value.shift : value
     end
 
     def ancestor?(ancestor, descendant)
