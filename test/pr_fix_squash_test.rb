@@ -98,13 +98,30 @@ module Ci
                           "commit" => { "message" => "fixup! fix things" } }] }
       end
       gh.on(:post, %r{/requested_reviewers}) { "{}" }
-      g = FakeGit.new(merge_base: "basesha", rev_parse: { "HEAD" => "newhead" },
-                      ls_remote: "oldhead")
+      g = FakeGit.new(merge_base: "basesha", rev_parse: { "HEAD" => %w[orighead newhead] },
+                      ls_remote: "orighead")
       r, _out, err = runner(gh, g)
       assert_equal 1, r.run
       assert_includes err.string, "did not land"
       assert_equal ["repos/o/r/pulls/1/requested_reviewers"],
                    gh.events_for(:post).map(&:first)
+    end
+
+    def test_superseded_push_does_not_request_review
+      gh = FakeGh.new
+      gh.on(:get_all, %r{/comments}) { comments_with_markers }
+      gh.on(:get, %r{/compare/}) do
+        { "total_commits" => 1,
+          "commits" => [{ "author" => { "login" => Ci::FIXER_BOT },
+                          "commit" => { "message" => "fixup! fix things" } }] }
+      end
+      gh.on(:post, %r{/requested_reviewers}) { "{}" }
+      g = FakeGit.new(merge_base: "basesha", rev_parse: { "HEAD" => %w[orighead newhead] },
+                      ls_remote: "otherhead")
+      r, out, = runner(gh, g)
+      assert_equal 0, r.run
+      assert_includes out.string, "newer push drives the loop"
+      assert_empty gh.events_for(:post)
     end
 
     def test_compare_failure_requests_review_and_fails
