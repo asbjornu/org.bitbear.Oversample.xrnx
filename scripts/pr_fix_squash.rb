@@ -57,7 +57,7 @@ module Ci
 
         case verdict(commits)
         when "fixups"
-          run_rebase(base, state&.review)
+          run_rebase(base, state&.review, head)
         when "normal"
           log("Only fixer normal commits since dispatch; requesting a review")
           request_review
@@ -89,7 +89,7 @@ module Ci
         @git.ancestor?(ref, "HEAD")
       end
 
-      def run_rebase(base, review)
+      def run_rebase(base, review, orig_head)
         unless rebase(base)
           log("Squash failed; requesting a review")
           request_review
@@ -102,7 +102,7 @@ module Ci
         rescue Ci::Git::Error
           # The verify step below treats an unlanded push as a recovery.
         end
-        verify_and_anchor(new_head, review)
+        verify_and_anchor(new_head, review, orig_head)
       end
 
       def rebase(base)
@@ -116,12 +116,20 @@ module Ci
         false
       end
 
-      def verify_and_anchor(new_head, review)
+      # A rejected --force-with-lease usually means another push already moved
+      # the remote head, and that push fired its own synchronize. Requesting a
+      # review from this stale run would race the queued squash and could review
+      # the newer, still-unsquashed head, so only recover when the remote stayed
+      # unchanged (or could not be read).
+      def verify_and_anchor(new_head, review, orig_head)
         remote_head, verified = verify_remote(new_head)
         if verified
           log("Squashed and force-pushed #{@head_ref}")
           3.times { return 0 if write_anchor(review, new_head) }
           warn("Could not record the squash anchor at #{new_head}")
+        elsif remote_head && remote_head != orig_head
+          log("Remote head moved to #{remote_head[0, 12]}; a newer push drives the loop")
+          return 0
         else
           warn("Squash did not land or could not be verified (remote at #{remote_head.to_s[0, 12]})")
         end
