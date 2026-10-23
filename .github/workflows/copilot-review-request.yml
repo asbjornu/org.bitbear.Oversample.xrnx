@@ -28,16 +28,10 @@ jobs:
           && github.event.pull_request.user.login == (vars.PR_FIX_AUTHOR || 'asbjornu'))
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the pull request
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       # The request runs with GH_AW_PUSH_TOKEN, so the code must not come from
       # the pull request: a same-repository PR can edit scripts/ and run
-      # arbitrary code with the PAT. Prefer the base branch's copy. It is
-      # absent until these scripts are merged, so fall back to the PR copy for
-      # that bootstrap only.
+      # arbitrary code with the PAT. Run only the base branch's copy; until it
+      # exists there, fail closed rather than execute the pull request copy.
       - name: Check out the trusted CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,10 +46,9 @@ jobs:
           PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           AUTHOR: ${{ vars.PR_FIX_AUTHOR || 'asbjornu' }}
         run: |
-          script=scripts/copilot_review_request.rb
-          if [ -f ".trusted/$script" ]; then
-            script=".trusted/$script"
-          else
-            echo "Trusted CI scripts are not on the base branch yet; using the pull request copy" >&2
+          script=".trusted/scripts/copilot_review_request.rb"
+          if [ ! -f "$script" ]; then
+            echo "Trusted CI scripts are not on the base branch yet; refusing to run the pull request copy" >&2
+            exit 1
           fi
           ruby "$script"
