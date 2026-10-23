@@ -39,9 +39,9 @@ jobs:
       # The squash runs with the push credential and GH_AW_PUSH_TOKEN, so its
       # implementation must not come from the pull request: a fixer change to
       # scripts/ would become arbitrary code execution with a repository-writing
-      # PAT. Keep the PR checkout as the Git working tree, but run the code from
-      # the base branch. It is absent until these scripts are merged, so fall
-      # back to the PR copy for that bootstrap only.
+      # PAT. Keep the PR checkout as the Git working tree, but run only the base
+      # branch's copy; until it exists there, fail closed rather than execute
+      # the pull request copy.
       - name: Check out the trusted CI scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,10 +57,9 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          script=scripts/pr_fix_squash.rb
-          if [ -f ".trusted/$script" ]; then
-            script=".trusted/$script"
-          else
-            echo "Trusted CI scripts are not on the base branch yet; using the pull request copy" >&2
+          script=".trusted/scripts/pr_fix_squash.rb"
+          if [ ! -f "$script" ]; then
+            echo "Trusted CI scripts are not on the base branch yet; refusing to run the pull request copy" >&2
+            exit 1
           fi
           ruby "$script"
